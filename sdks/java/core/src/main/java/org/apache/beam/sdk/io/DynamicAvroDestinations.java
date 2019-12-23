@@ -15,14 +15,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.sdk.io;
 
-import com.google.common.collect.ImmutableMap;
 import java.util.Map;
 import org.apache.avro.Schema;
 import org.apache.avro.file.CodecFactory;
 import org.apache.beam.sdk.io.FileBasedSink.DynamicDestinations;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
 
 /**
  * A specialization of {@link DynamicDestinations} for {@link AvroIO}. In addition to dynamic file
@@ -36,7 +35,7 @@ public abstract class DynamicAvroDestinations<UserT, DestinationT, OutputT>
 
   /** Return AVRO file metadata for a given destination. */
   public Map<String, Object> getMetadata(DestinationT destination) {
-    return ImmutableMap.<String, Object>of();
+    return ImmutableMap.of();
   }
 
   /** Return an AVRO codec for a given destination. */

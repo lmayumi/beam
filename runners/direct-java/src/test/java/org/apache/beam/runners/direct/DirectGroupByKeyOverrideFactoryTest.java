@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.direct;
 
 import static org.junit.Assert.assertThat;
@@ -48,8 +47,7 @@ public class DirectGroupByKeyOverrideFactoryTest {
         p.apply(
             Create.of(KV.of("foo", 1))
                 .withCoder(KvCoder.of(StringUtf8Coder.of(), VarIntCoder.of())));
-    PCollection<KV<String, Iterable<Integer>>> grouped =
-        input.apply(GroupByKey.<String, Integer>create());
+    PCollection<KV<String, Iterable<Integer>>> grouped = input.apply(GroupByKey.create());
     AppliedPTransform<?, ?, ?> producer = DirectGraphs.getProducer(grouped);
     PTransformReplacement<
             PCollection<KV<String, Integer>>, PCollection<KV<String, Iterable<Integer>>>>

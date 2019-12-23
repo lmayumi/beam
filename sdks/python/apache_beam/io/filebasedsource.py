@@ -25,7 +25,13 @@ that method for more details.
 For an example implementation of :class:`FileBasedSource` see
 :class:`~apache_beam.io._AvroSource`.
 """
-import uuid
+
+from __future__ import absolute_import
+
+from typing import Callable
+
+from past.builtins import long
+from past.builtins import unicode
 
 from apache_beam.internal import pickler
 from apache_beam.io import concat_source
@@ -33,18 +39,15 @@ from apache_beam.io import iobase
 from apache_beam.io import range_trackers
 from apache_beam.io.filesystem import CompressionTypes
 from apache_beam.io.filesystems import FileSystems
-from apache_beam.io.range_trackers import OffsetRange
+from apache_beam.io.restriction_trackers import OffsetRange
 from apache_beam.options.value_provider import StaticValueProvider
 from apache_beam.options.value_provider import ValueProvider
 from apache_beam.options.value_provider import check_accessible
 from apache_beam.transforms.core import DoFn
-from apache_beam.transforms.core import FlatMap
-from apache_beam.transforms.core import GroupByKey
-from apache_beam.transforms.core import Map
 from apache_beam.transforms.core import ParDo
 from apache_beam.transforms.core import PTransform
 from apache_beam.transforms.display import DisplayDataItem
-from apache_beam.transforms.trigger import DefaultTrigger
+from apache_beam.transforms.util import Reshuffle
 
 MAX_NUM_THREADS_FOR_SIZE_ESTIMATION = 25
 
@@ -70,7 +73,7 @@ class FileBasedSource(iobase.BoundedSource):
       file_pattern (str): the file glob to read a string or a
         :class:`~apache_beam.options.value_provider.ValueProvider`
         (placeholder to inject a runtime value).
-      min_bundle_size (str): minimum size of bundles that should be generated
+      min_bundle_size (int): minimum size of bundles that should be generated
         when performing initial splitting on this source.
       compression_type (str): Used to handle compressed output files.
         Typical value is :attr:`CompressionTypes.AUTO
@@ -100,12 +103,12 @@ class FileBasedSource(iobase.BoundedSource):
         result.
     """
 
-    if not isinstance(file_pattern, (basestring, ValueProvider)):
+    if not isinstance(file_pattern, ((str, unicode), ValueProvider)):
       raise TypeError('%s: file_pattern must be of type string'
                       ' or ValueProvider; got %r instead'
                       % (self.__class__.__name__, file_pattern))
 
-    if isinstance(file_pattern, basestring):
+    if isinstance(file_pattern, (str, unicode)):
       file_pattern = StaticValueProvider(str, file_pattern)
     self._pattern = file_pattern
 
@@ -127,6 +130,7 @@ class FileBasedSource(iobase.BoundedSource):
 
   @check_accessible(['_pattern'])
   def _get_concat_source(self):
+    # type: () -> concat_source.ConcatSource
     if self._concat_source is None:
       pattern = self._pattern.get()
 
@@ -354,28 +358,10 @@ class _ExpandIntoRanges(DoFn):
             0, range_trackers.OffsetRangeTracker.OFFSET_INFINITY))
 
 
-# Replace following with a generic reshard transform once
-# https://issues.apache.org/jira/browse/BEAM-1872 is implemented.
-class _Reshard(PTransform):
-
-  def expand(self, pvalue):
-    keyed_pc = (pvalue
-                | 'AssignKey' >> Map(lambda x: (uuid.uuid4(), x)))
-    if keyed_pc.windowing.windowfn.is_merging():
-      raise ValueError('Transform ReadAllFiles cannot be used in the presence '
-                       'of merging windows')
-    if not isinstance(keyed_pc.windowing.triggerfn, DefaultTrigger):
-      raise ValueError('Transform ReadAllFiles cannot be used in the presence '
-                       'of non-trivial triggers')
-
-    return (keyed_pc | 'GroupByKey' >> GroupByKey()
-            # Using FlatMap below due to the possibility of key collisions.
-            | 'DropKey' >> FlatMap(lambda k_values: k_values[1]))
-
-
 class _ReadRange(DoFn):
 
   def __init__(self, source_from_file):
+    # type: (Callable[[str], iobase.BoundedSource]) -> None
     self._source_from_file = source_from_file
 
   def process(self, element, *args, **kwargs):
@@ -398,13 +384,17 @@ class ReadAllFiles(PTransform):
   read a PCollection of files.
   """
 
-  def __init__(
-      self, splittable, compression_type, desired_bundle_size, min_bundle_size,
-      source_from_file):
+  def __init__(self,
+               splittable,  # type: bool
+               compression_type,
+               desired_bundle_size,  # type: int
+               min_bundle_size,  # type: int
+               source_from_file,  # type: Callable[[str], iobase.BoundedSource]
+              ):
     """
     Args:
-      splittable: If True, files won't be split into sub-ranges. If False, files
-                  may or may not be split into data ranges.
+      splittable: If False, files won't be split into sub-ranges. If True,
+                  files may or may not be split into data ranges.
       compression_type: A ``CompressionType`` object that specifies the
                   compression type of the files that will be processed. If
                   ``CompressionType.AUTO``, system will try to automatically
@@ -432,5 +422,5 @@ class ReadAllFiles(PTransform):
             | 'ExpandIntoRanges' >> ParDo(_ExpandIntoRanges(
                 self._splittable, self._compression_type,
                 self._desired_bundle_size, self._min_bundle_size))
-            | 'Reshard' >> _Reshard()
+            | 'Reshard' >> Reshuffle()
             | 'ReadRange' >> ParDo(_ReadRange(self._source_from_file)))

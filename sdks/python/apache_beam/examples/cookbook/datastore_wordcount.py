@@ -67,11 +67,7 @@ import argparse
 import logging
 import re
 import uuid
-
-from google.cloud.proto.datastore.v1 import entity_pb2
-from google.cloud.proto.datastore.v1 import query_pb2
-from googledatastore import helper as datastore_helper
-from googledatastore import PropertyFilter
+from builtins import object
 
 import apache_beam as beam
 from apache_beam.io import ReadFromText
@@ -81,6 +77,18 @@ from apache_beam.metrics import Metrics
 from apache_beam.metrics.metric import MetricsFilter
 from apache_beam.options.pipeline_options import PipelineOptions
 from apache_beam.options.pipeline_options import SetupOptions
+
+# Protect against environments where datastore library is not available.
+# pylint: disable=wrong-import-order, wrong-import-position
+try:
+  from google.cloud.proto.datastore.v1 import entity_pb2
+  from google.cloud.proto.datastore.v1 import query_pb2
+  from googledatastore import helper as datastore_helper
+  from googledatastore import PropertyFilter
+  from past.builtins import unicode
+except ImportError:
+  pass
+# pylint: enable=wrong-import-order, wrong-import-position
 
 
 class WordExtractingDoFn(beam.DoFn):
@@ -264,7 +272,7 @@ def run(argv=None):
     empty_lines_counter = query_result['counters'][0]
     logging.info('number of empty lines: %d', empty_lines_counter.committed)
   else:
-    logging.warn('unable to retrieve counter metrics from runner')
+    logging.warning('unable to retrieve counter metrics from runner')
 
   word_lengths_filter = MetricsFilter().with_name('word_len_dist')
   query_result = result.metrics().query(word_lengths_filter)
@@ -272,7 +280,7 @@ def run(argv=None):
     word_lengths_dist = query_result['distributions'][0]
     logging.info('average word length: %d', word_lengths_dist.committed.mean)
   else:
-    logging.warn('unable to retrieve distribution metrics from runner')
+    logging.warning('unable to retrieve distribution metrics from runner')
 
 
 if __name__ == '__main__':

@@ -15,12 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.fn.harness.control;
 
 import static org.junit.Assert.assertEquals;
 
-import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import org.apache.beam.model.fnexecution.v1.BeamFnApi;
@@ -40,47 +38,55 @@ public class RegisterHandlerTest {
 
   private static final BeamFnApi.InstructionRequest REGISTER_REQUEST =
       BeamFnApi.InstructionRequest.newBuilder()
-      .setInstructionId("1L")
-      .setRegister(BeamFnApi.RegisterRequest.newBuilder()
-          .addProcessBundleDescriptor(BeamFnApi.ProcessBundleDescriptor.newBuilder()
-              .setId("1L")
-              .putCoders("10L", RunnerApi.Coder.newBuilder()
-                  .setSpec(RunnerApi.SdkFunctionSpec.newBuilder()
-                      .setSpec(RunnerApi.FunctionSpec.newBuilder().setUrn("urn:10L").build())
-                      .build())
+          .setInstructionId("1L")
+          .setRegister(
+              BeamFnApi.RegisterRequest.newBuilder()
+                  .addProcessBundleDescriptor(
+                      BeamFnApi.ProcessBundleDescriptor.newBuilder()
+                          .setId("1L")
+                          .putCoders(
+                              "10L",
+                              RunnerApi.Coder.newBuilder()
+                                  .setSpec(
+                                      RunnerApi.FunctionSpec.newBuilder()
+                                          .setUrn("testUrn1")
+                                          .build())
+                                  .build())
+                          .build())
+                  .addProcessBundleDescriptor(
+                      BeamFnApi.ProcessBundleDescriptor.newBuilder()
+                          .setId("2L")
+                          .putCoders(
+                              "20L",
+                              RunnerApi.Coder.newBuilder()
+                                  .setSpec(
+                                      RunnerApi.FunctionSpec.newBuilder()
+                                          .setUrn("testUrn2")
+                                          .build())
+                                  .build())
+                          .build())
                   .build())
-              .build())
-          .addProcessBundleDescriptor(BeamFnApi.ProcessBundleDescriptor.newBuilder().setId("2L")
-              .putCoders("20L", RunnerApi.Coder.newBuilder()
-                  .setSpec(RunnerApi.SdkFunctionSpec.newBuilder()
-                      .setSpec(RunnerApi.FunctionSpec.newBuilder().setUrn("urn:20L").build())
-                      .build())
-                  .build())
-              .build())
-          .build())
-      .build();
+          .build();
   private static final BeamFnApi.InstructionResponse REGISTER_RESPONSE =
       BeamFnApi.InstructionResponse.newBuilder()
-      .setRegister(RegisterResponse.getDefaultInstance())
-      .build();
+          .setRegister(RegisterResponse.getDefaultInstance())
+          .build();
 
   @Test
   public void testRegistration() throws Exception {
     RegisterHandler handler = new RegisterHandler();
     Future<BeamFnApi.InstructionResponse> responseFuture =
-        executor.submit(new Callable<BeamFnApi.InstructionResponse>() {
-          @Override
-          public BeamFnApi.InstructionResponse call() throws Exception {
-            // Purposefully wait a small amount of time making it likely that
-            // a downstream caller needs to block.
-            Thread.sleep(100);
-            return handler.register(REGISTER_REQUEST).build();
-          }
-    });
-    assertEquals(REGISTER_REQUEST.getRegister().getProcessBundleDescriptor(0),
-        handler.getById("1L"));
-    assertEquals(REGISTER_REQUEST.getRegister().getProcessBundleDescriptor(1),
-        handler.getById("2L"));
+        executor.submit(
+            () -> {
+              // Purposefully wait a small amount of time making it likely that
+              // a downstream caller needs to block.
+              Thread.sleep(100);
+              return handler.register(REGISTER_REQUEST).build();
+            });
+    assertEquals(
+        REGISTER_REQUEST.getRegister().getProcessBundleDescriptor(0), handler.getById("1L"));
+    assertEquals(
+        REGISTER_REQUEST.getRegister().getProcessBundleDescriptor(1), handler.getById("2L"));
     assertEquals(
         REGISTER_REQUEST.getRegister().getProcessBundleDescriptor(0).getCodersOrThrow("10L"),
         handler.getById("10L"));

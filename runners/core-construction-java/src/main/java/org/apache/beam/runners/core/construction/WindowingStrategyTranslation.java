@@ -17,19 +17,16 @@
  */
 package org.apache.beam.runners.core.construction;
 
-import com.google.protobuf.ByteString;
-import com.google.protobuf.InvalidProtocolBufferException;
-import com.google.protobuf.util.Durations;
-import com.google.protobuf.util.Timestamps;
+import static org.apache.beam.runners.core.construction.BeamUrns.getUrn;
+
 import java.io.IOException;
 import java.io.Serializable;
 import org.apache.beam.model.pipeline.v1.RunnerApi;
 import org.apache.beam.model.pipeline.v1.RunnerApi.Components;
 import org.apache.beam.model.pipeline.v1.RunnerApi.FunctionSpec;
 import org.apache.beam.model.pipeline.v1.RunnerApi.OutputTime;
-import org.apache.beam.model.pipeline.v1.RunnerApi.SdkFunctionSpec;
-import org.apache.beam.model.pipeline.v1.StandardWindowFns;
 import org.apache.beam.model.pipeline.v1.StandardWindowFns.FixedWindowsPayload;
+import org.apache.beam.model.pipeline.v1.StandardWindowFns.GlobalWindowsPayload;
 import org.apache.beam.model.pipeline.v1.StandardWindowFns.SessionsPayload;
 import org.apache.beam.model.pipeline.v1.StandardWindowFns.SlidingWindowsPayload;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
@@ -44,6 +41,10 @@ import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.SerializableUtils;
 import org.apache.beam.sdk.values.WindowingStrategy;
 import org.apache.beam.sdk.values.WindowingStrategy.AccumulationMode;
+import org.apache.beam.vendor.grpc.v1p21p0.com.google.protobuf.ByteString;
+import org.apache.beam.vendor.grpc.v1p21p0.com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.beam.vendor.grpc.v1p21p0.com.google.protobuf.util.Durations;
+import org.apache.beam.vendor.grpc.v1p21p0.com.google.protobuf.util.Timestamps;
 import org.joda.time.Duration;
 
 /** Utilities for working with {@link WindowingStrategy WindowingStrategies}. */
@@ -55,6 +56,8 @@ public class WindowingStrategyTranslation implements Serializable {
         return AccumulationMode.DISCARDING_FIRED_PANES;
       case ACCUMULATING:
         return AccumulationMode.ACCUMULATING_FIRED_PANES;
+      case RETRACTING:
+        return AccumulationMode.RETRACTING_FIRED_PANES;
       case UNRECOGNIZED:
       default:
         // Whether or not it is proto that cannot recognize it (due to the version of the
@@ -75,6 +78,8 @@ public class WindowingStrategyTranslation implements Serializable {
         return RunnerApi.AccumulationMode.Enum.DISCARDING;
       case ACCUMULATING_FIRED_PANES:
         return RunnerApi.AccumulationMode.Enum.ACCUMULATING;
+      case RETRACTING_FIRED_PANES:
+        return RunnerApi.AccumulationMode.Enum.RETRACTING;
       default:
         throw new IllegalArgumentException(
             String.format(
@@ -158,7 +163,7 @@ public class WindowingStrategyTranslation implements Serializable {
   }
 
   public static RunnerApi.OutputTime.Enum toProto(TimestampCombiner timestampCombiner) {
-    switch(timestampCombiner) {
+    switch (timestampCombiner) {
       case EARLIEST:
         return OutputTime.Enum.EARLIEST_IN_PANE;
       case END_OF_WINDOW:
@@ -168,9 +173,7 @@ public class WindowingStrategyTranslation implements Serializable {
       default:
         throw new IllegalArgumentException(
             String.format(
-                "Unknown %s: %s",
-                TimestampCombiner.class.getSimpleName(),
-                timestampCombiner));
+                "Unknown %s: %s", TimestampCombiner.class.getSimpleName(), timestampCombiner));
     }
   }
 
@@ -196,79 +199,60 @@ public class WindowingStrategyTranslation implements Serializable {
     }
   }
 
-  public static final String GLOBAL_WINDOWS_FN = "beam:windowfn:global_windows:v0.1";
-  public static final String FIXED_WINDOWS_FN = "beam:windowfn:fixed_windows:v0.1";
-  public static final String SLIDING_WINDOWS_FN = "beam:windowfn:sliding_windows:v0.1";
-  public static final String SESSION_WINDOWS_FN = "beam:windowfn:session_windows:v0.1";
   // This URN says that the WindowFn is just a UDF blob the Java SDK understands
   // TODO: standardize such things
   public static final String SERIALIZED_JAVA_WINDOWFN_URN = "beam:windowfn:javasdk:v0.1";
-  public static final String OLD_SERIALIZED_JAVA_WINDOWFN_URN = "urn:beam:windowfn:javasdk:0.1";
-  // Remove this once the dataflow worker understands all the above formats.
-  private static final boolean USE_OLD_SERIALIZED_JAVA_WINDOWFN_URN = true;
+  public static final String GLOBAL_WINDOWS_URN =
+      BeamUrns.getUrn(GlobalWindowsPayload.Enum.PROPERTIES);
+  public static final String FIXED_WINDOWS_URN =
+      BeamUrns.getUrn(FixedWindowsPayload.Enum.PROPERTIES);
+  public static final String SLIDING_WINDOWS_URN =
+      BeamUrns.getUrn(SlidingWindowsPayload.Enum.PROPERTIES);
+  public static final String SESSION_WINDOWS_URN = BeamUrns.getUrn(SessionsPayload.Enum.PROPERTIES);
 
   /**
    * Converts a {@link WindowFn} into a {@link RunnerApi.MessageWithComponents} where {@link
    * RunnerApi.MessageWithComponents#getFunctionSpec()} is a {@link RunnerApi.FunctionSpec} for the
    * input {@link WindowFn}.
    */
-  public static SdkFunctionSpec toProto(
-      WindowFn<?, ?> windowFn, @SuppressWarnings("unused") SdkComponents components) {
-    // TODO: Set environment IDs
+  public static FunctionSpec toProto(WindowFn<?, ?> windowFn, SdkComponents components) {
     ByteString serializedFn = ByteString.copyFrom(SerializableUtils.serializeToByteArray(windowFn));
-    if (USE_OLD_SERIALIZED_JAVA_WINDOWFN_URN) {
-      return SdkFunctionSpec.newBuilder()
-          .setSpec(
-              FunctionSpec.newBuilder()
-                  .setUrn(OLD_SERIALIZED_JAVA_WINDOWFN_URN)
-                  .setPayload(serializedFn)
-                  .build())
-          .build();
-    } else if (windowFn instanceof GlobalWindows) {
-      return SdkFunctionSpec.newBuilder()
-          .setSpec(FunctionSpec.newBuilder().setUrn(GLOBAL_WINDOWS_FN))
-          .build();
+    if (windowFn instanceof GlobalWindows) {
+      return FunctionSpec.newBuilder().setUrn(GLOBAL_WINDOWS_URN).build();
     } else if (windowFn instanceof FixedWindows) {
       FixedWindowsPayload fixedWindowsPayload =
           FixedWindowsPayload.newBuilder()
               .setSize(Durations.fromMillis(((FixedWindows) windowFn).getSize().getMillis()))
               .setOffset(Timestamps.fromMillis(((FixedWindows) windowFn).getOffset().getMillis()))
               .build();
-      return SdkFunctionSpec.newBuilder()
-          .setSpec(
-              FunctionSpec.newBuilder()
-                  .setUrn(FIXED_WINDOWS_FN)
-                  .setPayload(fixedWindowsPayload.toByteString()))
+      return FunctionSpec.newBuilder()
+          .setUrn(FIXED_WINDOWS_URN)
+          .setPayload(fixedWindowsPayload.toByteString())
           .build();
     } else if (windowFn instanceof SlidingWindows) {
-      SlidingWindowsPayload slidingWindowsPayload = SlidingWindowsPayload.newBuilder()
-          .setSize(Durations.fromMillis(((SlidingWindows) windowFn).getSize().getMillis()))
-          .setOffset(Timestamps.fromMillis(((SlidingWindows) windowFn).getOffset().getMillis()))
-          .setPeriod(Durations.fromMillis(((SlidingWindows) windowFn).getPeriod().getMillis()))
-          .build();
-      return SdkFunctionSpec.newBuilder()
-          .setSpec(
-              FunctionSpec.newBuilder()
-                  .setUrn(SLIDING_WINDOWS_FN)
-                  .setPayload(slidingWindowsPayload.toByteString()))
+      SlidingWindowsPayload slidingWindowsPayload =
+          SlidingWindowsPayload.newBuilder()
+              .setSize(Durations.fromMillis(((SlidingWindows) windowFn).getSize().getMillis()))
+              .setOffset(Timestamps.fromMillis(((SlidingWindows) windowFn).getOffset().getMillis()))
+              .setPeriod(Durations.fromMillis(((SlidingWindows) windowFn).getPeriod().getMillis()))
+              .build();
+      return FunctionSpec.newBuilder()
+          .setUrn(SLIDING_WINDOWS_URN)
+          .setPayload(slidingWindowsPayload.toByteString())
           .build();
     } else if (windowFn instanceof Sessions) {
       SessionsPayload sessionsPayload =
           SessionsPayload.newBuilder()
               .setGapSize(Durations.fromMillis(((Sessions) windowFn).getGapDuration().getMillis()))
               .build();
-      return SdkFunctionSpec.newBuilder()
-          .setSpec(
-              FunctionSpec.newBuilder()
-                  .setUrn(SESSION_WINDOWS_FN)
-                  .setPayload(sessionsPayload.toByteString()))
+      return FunctionSpec.newBuilder()
+          .setUrn(SESSION_WINDOWS_URN)
+          .setPayload(sessionsPayload.toByteString())
           .build();
     } else {
-      return SdkFunctionSpec.newBuilder()
-          .setSpec(
-              FunctionSpec.newBuilder()
-                  .setUrn(SERIALIZED_JAVA_WINDOWFN_URN)
-                  .setPayload(serializedFn))
+      return FunctionSpec.newBuilder()
+          .setUrn(SERIALIZED_JAVA_WINDOWFN_URN)
+          .setPayload(serializedFn)
           .build();
     }
   }
@@ -279,9 +263,8 @@ public class WindowingStrategyTranslation implements Serializable {
    * RunnerApi.WindowingStrategy RunnerApi.WindowingStrategy (proto)} for the input {@link
    * WindowingStrategy}.
    */
-  public static RunnerApi.MessageWithComponents toProto(WindowingStrategy<?, ?> windowingStrategy)
-      throws IOException {
-    SdkComponents components = SdkComponents.create();
+  public static RunnerApi.MessageWithComponents toMessageProto(
+      WindowingStrategy<?, ?> windowingStrategy, SdkComponents components) throws IOException {
     RunnerApi.WindowingStrategy windowingStrategyProto = toProto(windowingStrategy, components);
 
     return RunnerApi.MessageWithComponents.newBuilder()
@@ -296,7 +279,7 @@ public class WindowingStrategyTranslation implements Serializable {
    */
   public static RunnerApi.WindowingStrategy toProto(
       WindowingStrategy<?, ?> windowingStrategy, SdkComponents components) throws IOException {
-    SdkFunctionSpec windowFnSpec = toProto(windowingStrategy.getWindowFn(), components);
+    FunctionSpec windowFnSpec = toProto(windowingStrategy.getWindowFn(), components);
 
     RunnerApi.WindowingStrategy.Builder windowingStrategyProto =
         RunnerApi.WindowingStrategy.newBuilder()
@@ -309,14 +292,15 @@ public class WindowingStrategyTranslation implements Serializable {
             .setAssignsToOneWindow(windowingStrategy.getWindowFn().assignsToOneWindow())
             .setOnTimeBehavior(toProto(windowingStrategy.getOnTimeBehavior()))
             .setWindowCoderId(
-                components.registerCoder(windowingStrategy.getWindowFn().windowCoder()));
+                components.registerCoder(windowingStrategy.getWindowFn().windowCoder()))
+            .setEnvironmentId(components.getOnlyEnvironmentId());
 
     return windowingStrategyProto.build();
   }
 
   /**
-   * Converts from a {@link RunnerApi.WindowingStrategy} accompanied by {@link Components}
-   * to the SDK's {@link WindowingStrategy}.
+   * Converts from a {@link RunnerApi.WindowingStrategy} accompanied by {@link Components} to the
+   * SDK's {@link WindowingStrategy}.
    */
   public static WindowingStrategy<?, ?> fromProto(RunnerApi.MessageWithComponents proto)
       throws InvalidProtocolBufferException {
@@ -341,7 +325,7 @@ public class WindowingStrategyTranslation implements Serializable {
       RunnerApi.WindowingStrategy proto, RehydratedComponents components)
       throws InvalidProtocolBufferException {
 
-    SdkFunctionSpec windowFnSpec = proto.getWindowFn();
+    FunctionSpec windowFnSpec = proto.getWindowFn();
     WindowFn<?, ?> windowFn = windowFnFromProto(windowFnSpec);
     TimestampCombiner timestampCombiner = timestampCombinerFromProto(proto.getOutputTime());
     AccumulationMode accumulationMode = fromProto(proto.getAccumulationMode());
@@ -359,38 +343,32 @@ public class WindowingStrategyTranslation implements Serializable {
         .withOnTimeBehavior(onTimeBehavior);
   }
 
-  public static WindowFn<?, ?> windowFnFromProto(SdkFunctionSpec windowFnSpec) {
+  public static WindowFn<?, ?> windowFnFromProto(FunctionSpec windowFnSpec) {
     try {
-      switch (windowFnSpec.getSpec().getUrn()) {
-        case GLOBAL_WINDOWS_FN:
-          return new GlobalWindows();
-        case FIXED_WINDOWS_FN:
-          StandardWindowFns.FixedWindowsPayload fixedParams = null;
-          fixedParams =
-              StandardWindowFns.FixedWindowsPayload.parseFrom(
-                  windowFnSpec.getSpec().getPayload());
-          return FixedWindows.of(Duration.millis(Durations.toMillis(fixedParams.getSize())))
-              .withOffset(Duration.millis(Timestamps.toMillis(fixedParams.getOffset())));
-        case SLIDING_WINDOWS_FN:
-          StandardWindowFns.SlidingWindowsPayload slidingParams =
-              StandardWindowFns.SlidingWindowsPayload.parseFrom(
-                  windowFnSpec.getSpec().getPayload());
-          return SlidingWindows.of(Duration.millis(Durations.toMillis(slidingParams.getSize())))
-              .every(Duration.millis(Durations.toMillis(slidingParams.getPeriod())))
-              .withOffset(Duration.millis(Timestamps.toMillis(slidingParams.getOffset())));
-        case SESSION_WINDOWS_FN:
-          StandardWindowFns.SessionsPayload sessionParams =
-              StandardWindowFns.SessionsPayload.parseFrom(windowFnSpec.getSpec().getPayload());
-          return Sessions.withGapDuration(
-              Duration.millis(Durations.toMillis(sessionParams.getGapSize())));
-        case SERIALIZED_JAVA_WINDOWFN_URN:
-        case OLD_SERIALIZED_JAVA_WINDOWFN_URN:
-          return (WindowFn<?, ?>)
-              SerializableUtils.deserializeFromByteArray(
-                  windowFnSpec.getSpec().getPayload().toByteArray(), "WindowFn");
-        default:
-          throw new IllegalArgumentException(
-              "Unknown or unsupported WindowFn: " + windowFnSpec.getSpec().getUrn());
+      String s = windowFnSpec.getUrn();
+      if (s.equals(getUrn(GlobalWindowsPayload.Enum.PROPERTIES))) {
+        return new GlobalWindows();
+      } else if (s.equals(getUrn(FixedWindowsPayload.Enum.PROPERTIES))) {
+        FixedWindowsPayload fixedParams = FixedWindowsPayload.parseFrom(windowFnSpec.getPayload());
+        return FixedWindows.of(Duration.millis(Durations.toMillis(fixedParams.getSize())))
+            .withOffset(Duration.millis(Timestamps.toMillis(fixedParams.getOffset())));
+      } else if (s.equals(getUrn(SlidingWindowsPayload.Enum.PROPERTIES))) {
+        SlidingWindowsPayload slidingParams =
+            SlidingWindowsPayload.parseFrom(windowFnSpec.getPayload());
+        return SlidingWindows.of(Duration.millis(Durations.toMillis(slidingParams.getSize())))
+            .every(Duration.millis(Durations.toMillis(slidingParams.getPeriod())))
+            .withOffset(Duration.millis(Timestamps.toMillis(slidingParams.getOffset())));
+      } else if (s.equals(getUrn(SessionsPayload.Enum.PROPERTIES))) {
+        SessionsPayload sessionParams = SessionsPayload.parseFrom(windowFnSpec.getPayload());
+        return Sessions.withGapDuration(
+            Duration.millis(Durations.toMillis(sessionParams.getGapSize())));
+      } else if (s.equals(SERIALIZED_JAVA_WINDOWFN_URN)) {
+        return (WindowFn<?, ?>)
+            SerializableUtils.deserializeFromByteArray(
+                windowFnSpec.getPayload().toByteArray(), "WindowFn");
+      } else {
+        throw new IllegalArgumentException(
+            "Unknown or unsupported WindowFn: " + windowFnSpec.getUrn());
       }
     } catch (InvalidProtocolBufferException e) {
       throw new IllegalArgumentException(
@@ -398,7 +376,7 @@ public class WindowingStrategyTranslation implements Serializable {
               "%s for %s with URN %s did not contain expected proto message for payload",
               FunctionSpec.class.getSimpleName(),
               WindowFn.class.getSimpleName(),
-              windowFnSpec.getSpec().getUrn()),
+              windowFnSpec.getUrn()),
           e);
     }
   }

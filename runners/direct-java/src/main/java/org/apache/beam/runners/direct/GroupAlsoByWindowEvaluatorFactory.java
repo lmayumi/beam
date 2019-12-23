@@ -17,13 +17,10 @@
  */
 package org.apache.beam.runners.direct;
 
-import com.google.common.base.Function;
-import com.google.common.base.Predicate;
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 import org.apache.beam.model.pipeline.v1.RunnerApi;
 import org.apache.beam.runners.core.GroupAlsoByWindowsAggregators;
 import org.apache.beam.runners.core.GroupByKeyViaGroupByKeyOnly;
@@ -42,6 +39,7 @@ import org.apache.beam.runners.local.StructuralKey;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.metrics.Counter;
 import org.apache.beam.sdk.metrics.Metrics;
+import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.runners.AppliedPTransform;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
@@ -52,27 +50,29 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.WindowingStrategy;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 import org.joda.time.Instant;
 
 /**
- * The {@link DirectRunner} {@link TransformEvaluatorFactory} for the
- * {@link DirectGroupAlsoByWindow} {@link PTransform}.
+ * The {@link DirectRunner} {@link TransformEvaluatorFactory} for the {@link
+ * DirectGroupAlsoByWindow} {@link PTransform}.
  */
 class GroupAlsoByWindowEvaluatorFactory implements TransformEvaluatorFactory {
   private final EvaluationContext evaluationContext;
+  private final PipelineOptions options;
 
-  GroupAlsoByWindowEvaluatorFactory(EvaluationContext evaluationContext) {
+  GroupAlsoByWindowEvaluatorFactory(EvaluationContext evaluationContext, PipelineOptions options) {
     this.evaluationContext = evaluationContext;
+    this.options = options;
   }
 
   @Override
   public <InputT> TransformEvaluator<InputT> forApplication(
-      AppliedPTransform<?, ?, ?> application,
-      CommittedBundle<?> inputBundle) {
+      AppliedPTransform<?, ?, ?> application, CommittedBundle<?> inputBundle) {
     @SuppressWarnings({"cast", "unchecked", "rawtypes"})
     TransformEvaluator<InputT> evaluator =
-        createEvaluator(
-            (AppliedPTransform) application, (CommittedBundle) inputBundle);
+        createEvaluator((AppliedPTransform) application, (CommittedBundle) inputBundle);
     return evaluator;
   }
 
@@ -86,8 +86,7 @@ class GroupAlsoByWindowEvaluatorFactory implements TransformEvaluatorFactory {
               DirectGroupAlsoByWindow<K, V>>
           application,
       CommittedBundle<KeyedWorkItem<K, V>> inputBundle) {
-    return new GroupAlsoByWindowEvaluator<>(
-        evaluationContext, inputBundle, application);
+    return new GroupAlsoByWindowEvaluator<>(evaluationContext, options, inputBundle, application);
   }
 
   /**
@@ -100,9 +99,11 @@ class GroupAlsoByWindowEvaluatorFactory implements TransformEvaluatorFactory {
   private static class GroupAlsoByWindowEvaluator<K, V>
       implements TransformEvaluator<KeyedWorkItem<K, V>> {
     private final EvaluationContext evaluationContext;
+    private final PipelineOptions options;
     private final AppliedPTransform<
-        PCollection<KeyedWorkItem<K, V>>, PCollection<KV<K, Iterable<V>>>,
-        DirectGroupAlsoByWindow<K, V>>
+            PCollection<KeyedWorkItem<K, V>>,
+            PCollection<KV<K, Iterable<V>>>,
+            DirectGroupAlsoByWindow<K, V>>
         application;
 
     private final DirectStepContext stepContext;
@@ -114,24 +115,26 @@ class GroupAlsoByWindowEvaluatorFactory implements TransformEvaluatorFactory {
     private final ImmutableList.Builder<WindowedValue<KeyedWorkItem<K, V>>> unprocessedElements;
 
     private final SystemReduceFn<K, V, Iterable<V>, Iterable<V>, BoundedWindow> reduceFn;
-    private final Counter droppedDueToClosedWindow;
     private final Counter droppedDueToLateness;
 
     public GroupAlsoByWindowEvaluator(
         final EvaluationContext evaluationContext,
+        PipelineOptions options,
         CommittedBundle<KeyedWorkItem<K, V>> inputBundle,
         final AppliedPTransform<
                 PCollection<KeyedWorkItem<K, V>>,
                 PCollection<KV<K, Iterable<V>>>,
-                DirectGroupAlsoByWindow<K, V>> application) {
+                DirectGroupAlsoByWindow<K, V>>
+            application) {
       this.evaluationContext = evaluationContext;
+      this.options = options;
       this.application = application;
 
       structuralKey = inputBundle.getKey();
-      stepContext = evaluationContext
-          .getExecutionContext(application, inputBundle.getKey())
-          .getStepContext(
-              evaluationContext.getStepName(application));
+      stepContext =
+          evaluationContext
+              .getExecutionContext(application, inputBundle.getKey())
+              .getStepContext(evaluationContext.getStepName(application));
       windowingStrategy =
           (WindowingStrategy<?, BoundedWindow>)
               application.getTransform().getInputWindowingStrategy();
@@ -142,10 +145,10 @@ class GroupAlsoByWindowEvaluatorFactory implements TransformEvaluatorFactory {
       Coder<V> valueCoder =
           application.getTransform().getValueCoder(inputBundle.getPCollection().getCoder());
       reduceFn = SystemReduceFn.buffering(valueCoder);
-      droppedDueToClosedWindow = Metrics.counter(GroupAlsoByWindowEvaluator.class,
-          GroupAlsoByWindowsAggregators.DROPPED_DUE_TO_CLOSED_WINDOW_COUNTER);
-      droppedDueToLateness = Metrics.counter(GroupAlsoByWindowEvaluator.class,
-          GroupAlsoByWindowsAggregators.DROPPED_DUE_TO_LATENESS_COUNTER);
+      droppedDueToLateness =
+          Metrics.counter(
+              GroupAlsoByWindowEvaluator.class,
+              GroupAlsoByWindowsAggregators.DROPPED_DUE_TO_LATENESS_COUNTER);
     }
 
     @Override
@@ -159,8 +162,7 @@ class GroupAlsoByWindowEvaluatorFactory implements TransformEvaluatorFactory {
               (PCollection<KV<K, Iterable<V>>>)
                   Iterables.getOnlyElement(application.getOutputs().values()));
       outputBundles.add(bundle);
-      CopyOnAccessInMemoryStateInternals stateInternals =
-          (CopyOnAccessInMemoryStateInternals) stepContext.stateInternals();
+      CopyOnAccessInMemoryStateInternals stateInternals = stepContext.stateInternals();
       DirectTimerInternals timerInternals = stepContext.timerInternals();
       RunnerApi.Trigger runnerApiTrigger =
           TriggerTranslation.toProto(windowingStrategy.getTrigger());
@@ -175,7 +177,7 @@ class GroupAlsoByWindowEvaluatorFactory implements TransformEvaluatorFactory {
               new OutputWindowedValueToBundle<>(bundle),
               new UnsupportedSideInputReader(DirectGroupAlsoByWindow.class.getSimpleName()),
               reduceFn,
-              evaluationContext.getPipelineOptions());
+              options);
 
       // Drop any elements within expired windows
       reduceFnRunner.processElements(
@@ -201,43 +203,34 @@ class GroupAlsoByWindowEvaluatorFactory implements TransformEvaluatorFactory {
      * Returns an {@code Iterable<WindowedValue<InputT>>} that only contains non-late input
      * elements.
      */
-    public Iterable<WindowedValue<V>> dropExpiredWindows(
+    Iterable<WindowedValue<V>> dropExpiredWindows(
         final K key, Iterable<WindowedValue<V>> elements, final TimerInternals timerInternals) {
-      return FluentIterable.from(elements)
-          .transformAndConcat(
-              // Explode windows to filter out expired ones
-              new Function<WindowedValue<V>, Iterable<WindowedValue<V>>>() {
-                @Override
-                public Iterable<WindowedValue<V>> apply(WindowedValue<V> input) {
-                  return input.explodeWindows();
-                }
-              })
+      return StreamSupport.stream(elements.spliterator(), false)
+          .flatMap(wv -> StreamSupport.stream(wv.explodeWindows().spliterator(), false))
           .filter(
-              new Predicate<WindowedValue<V>>() {
-                @Override
-                public boolean apply(WindowedValue<V> input) {
-                  BoundedWindow window = Iterables.getOnlyElement(input.getWindows());
-                  boolean expired =
-                      window
-                          .maxTimestamp()
-                          .plus(windowingStrategy.getAllowedLateness())
-                          .isBefore(timerInternals.currentInputWatermarkTime());
-                  if (expired) {
-                    // The element is too late for this window.
-                    droppedDueToLateness.inc();
-                    WindowTracing.debug(
-                        "{}: Dropping element at {} for key: {}; "
-                            + "window: {} since it is too far behind inputWatermark: {}",
-                        DirectGroupAlsoByWindow.class.getSimpleName(),
-                        input.getTimestamp(),
-                        key,
-                        window,
-                        timerInternals.currentInputWatermarkTime());
-                  }
-                  // Keep the element if the window is not expired.
-                  return !expired;
+              input -> {
+                BoundedWindow window = Iterables.getOnlyElement(input.getWindows());
+                boolean expired =
+                    window
+                        .maxTimestamp()
+                        .plus(windowingStrategy.getAllowedLateness())
+                        .isBefore(timerInternals.currentInputWatermarkTime());
+                if (expired) {
+                  // The element is too late for this window.
+                  droppedDueToLateness.inc();
+                  WindowTracing.debug(
+                      "{}: Dropping element at {} for key: {}; "
+                          + "window: {} since it is too far behind inputWatermark: {}",
+                      DirectGroupAlsoByWindow.class.getSimpleName(),
+                      input.getTimestamp(),
+                      key,
+                      window,
+                      timerInternals.currentInputWatermarkTime());
                 }
-              });
+                // Keep the element if the window is not expired.
+                return !expired;
+              })
+          .collect(Collectors.toList());
     }
   }
 

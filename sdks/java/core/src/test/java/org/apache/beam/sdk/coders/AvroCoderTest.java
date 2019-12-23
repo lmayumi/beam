@@ -19,8 +19,8 @@ package org.apache.beam.sdk.coders;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.esotericsoftware.kryo.Kryo;
@@ -31,7 +31,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -74,6 +73,8 @@ import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
 import org.hamcrest.TypeSafeMatcher;
+import org.joda.time.DateTime;
+import org.joda.time.DateTimeZone;
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
@@ -86,19 +87,27 @@ import org.objenesis.strategy.StdInstantiatorStrategy;
 @RunWith(JUnit4.class)
 public class AvroCoderTest {
 
+  public static final DateTime DATETIME_A =
+      new DateTime().withDate(1994, 10, 31).withZone(DateTimeZone.UTC);
+  public static final DateTime DATETIME_B =
+      new DateTime().withDate(1997, 4, 25).withZone(DateTimeZone.UTC);
+
   @DefaultCoder(AvroCoder.class)
   private static class Pojo {
     public String text;
     public int count;
 
+    @AvroSchema("{\"type\": \"long\", \"logicalType\": \"timestamp-millis\"}")
+    public DateTime timestamp;
+
     // Empty constructor required for Avro decoding.
     @SuppressWarnings("unused")
-    public Pojo() {
-    }
+    public Pojo() {}
 
-    public Pojo(String text, int count) {
+    public Pojo(String text, int count, DateTime timestamp) {
       this.text = text;
       this.count = count;
+      this.timestamp = timestamp;
     }
 
     // auto-generated
@@ -116,9 +125,10 @@ public class AvroCoderTest {
       if (count != pojo.count) {
         return false;
       }
-      if (text != null
-          ? !text.equals(pojo.text)
-          : pojo.text != null) {
+      if (text != null ? !text.equals(pojo.text) : pojo.text != null) {
+        return false;
+      }
+      if (timestamp != null ? !timestamp.equals(pojo.timestamp) : pojo.timestamp != null) {
         return false;
       }
 
@@ -133,8 +143,13 @@ public class AvroCoderTest {
     @Override
     public String toString() {
       return "Pojo{"
-          + "text='" + text + '\''
-          + ", count=" + count
+          + "text='"
+          + text
+          + '\''
+          + ", count="
+          + count
+          + ", timestamp="
+          + timestamp
           + '}';
     }
   }
@@ -146,8 +161,7 @@ public class AvroCoderTest {
     }
   }
 
-  @Rule
-  public TestPipeline pipeline = TestPipeline.create();
+  @Rule public TestPipeline pipeline = TestPipeline.create();
 
   @Test
   public void testAvroCoderEncoding() throws Exception {
@@ -155,9 +169,9 @@ public class AvroCoderTest {
     CoderProperties.coderSerializable(coder);
     AvroCoder<Pojo> copy = SerializableUtils.clone(coder);
 
-    Pojo pojo = new Pojo("foo", 3);
-    Pojo equalPojo = new Pojo("foo", 3);
-    Pojo otherPojo = new Pojo("bar", -19);
+    Pojo pojo = new Pojo("foo", 3, DATETIME_A);
+    Pojo equalPojo = new Pojo("foo", 3, DATETIME_A);
+    Pojo otherPojo = new Pojo("bar", -19, DATETIME_B);
     CoderProperties.coderConsistentWithEquals(coder, pojo, equalPojo);
     CoderProperties.coderConsistentWithEquals(copy, pojo, equalPojo);
     CoderProperties.coderConsistentWithEquals(coder, pojo, otherPojo);
@@ -165,8 +179,8 @@ public class AvroCoderTest {
   }
 
   /**
-   * Tests that {@link AvroCoder} works around issues in Avro where cache classes might be
-   * from the wrong ClassLoader, causing confusing "Cannot cast X to X" error messages.
+   * Tests that {@link AvroCoder} works around issues in Avro where cache classes might be from the
+   * wrong ClassLoader, causing confusing "Cannot cast X to X" error messages.
    */
   @Test
   public void testTwoClassLoaders() throws Exception {
@@ -198,9 +212,6 @@ public class AvroCoderTest {
     Object cloned1 = CoderUtils.clone(avroCoder1, pojo1);
     Object cloned2 = CoderUtils.clone(avroCoder2, pojo2);
 
-    Class<?> class1 = cloned1.getClass();
-    Class<?> class2 = cloned2.getClass();
-
     // Confirming that the uncorrupted coder is fine
     pojoClass1.cast(cloned1);
 
@@ -216,15 +227,15 @@ public class AvroCoderTest {
    */
   @Test
   public void testTransientFieldInitialization() throws Exception {
-    Pojo value = new Pojo("Hello", 42);
+    Pojo value = new Pojo("Hello", 42, DATETIME_A);
     AvroCoder<Pojo> coder = AvroCoder.of(Pojo.class);
 
-    //Serialization of object
+    // Serialization of object
     ByteArrayOutputStream bos = new ByteArrayOutputStream();
     ObjectOutputStream out = new ObjectOutputStream(bos);
     out.writeObject(coder);
 
-    //De-serialization of object
+    // De-serialization of object
     ByteArrayInputStream bis = new ByteArrayInputStream(bos.toByteArray());
     ObjectInputStream in = new ObjectInputStream(bis);
     AvroCoder<Pojo> copied = (AvroCoder<Pojo>) in.readObject();
@@ -233,21 +244,20 @@ public class AvroCoderTest {
   }
 
   /**
-   * Confirm that we can serialize and deserialize an AvroCoder object using Kryo.
-   * (BEAM-626).
+   * Confirm that we can serialize and deserialize an AvroCoder object using Kryo. (BEAM-626).
    *
    * @throws Exception
    */
   @Test
   public void testKryoSerialization() throws Exception {
-    Pojo value = new Pojo("Hello", 42);
+    Pojo value = new Pojo("Hello", 42, DATETIME_A);
     AvroCoder<Pojo> coder = AvroCoder.of(Pojo.class);
 
-    //Kryo instantiation
+    // Kryo instantiation
     Kryo kryo = new Kryo();
     kryo.setInstantiatorStrategy(new StdInstantiatorStrategy());
 
-    //Serialization of object without any memoization
+    // Serialization of object without any memoization
     ByteArrayOutputStream coderWithoutMemoizationBos = new ByteArrayOutputStream();
     try (Output output = new Output(coderWithoutMemoizationBos)) {
       kryo.writeObject(output, coder);
@@ -278,7 +288,7 @@ public class AvroCoderTest {
 
   @Test
   public void testPojoEncoding() throws Exception {
-    Pojo value = new Pojo("Hello", 42);
+    Pojo value = new Pojo("Hello", 42, DATETIME_A);
     AvroCoder<Pojo> coder = AvroCoder.of(Pojo.class);
 
     CoderProperties.coderDecodeEncodeEqual(coder, value);
@@ -288,14 +298,14 @@ public class AvroCoderTest {
   public void testGenericRecordEncoding() throws Exception {
     String schemaString =
         "{\"namespace\": \"example.avro\",\n"
-      + " \"type\": \"record\",\n"
-      + " \"name\": \"User\",\n"
-      + " \"fields\": [\n"
-      + "     {\"name\": \"name\", \"type\": \"string\"},\n"
-      + "     {\"name\": \"favorite_number\", \"type\": [\"int\", \"null\"]},\n"
-      + "     {\"name\": \"favorite_color\", \"type\": [\"string\", \"null\"]}\n"
-      + " ]\n"
-      + "}";
+            + " \"type\": \"record\",\n"
+            + " \"name\": \"User\",\n"
+            + " \"fields\": [\n"
+            + "     {\"name\": \"name\", \"type\": \"string\"},\n"
+            + "     {\"name\": \"favorite_number\", \"type\": [\"int\", \"null\"]},\n"
+            + "     {\"name\": \"favorite_color\", \"type\": [\"string\", \"null\"]}\n"
+            + " ]\n"
+            + "}";
     Schema schema = (new Schema.Parser()).parse(schemaString);
 
     GenericRecord before = new GenericData.Record(schema);
@@ -314,7 +324,7 @@ public class AvroCoderTest {
     // This test ensures that the coder doesn't read ahead and buffer data.
     // Reading ahead causes a problem if the stream consists of records of different
     // types.
-    Pojo before = new Pojo("Hello", 42);
+    Pojo before = new Pojo("Hello", 42, DATETIME_A);
 
     AvroCoder<Pojo> coder = AvroCoder.of(Pojo.class);
     SerializableCoder<Integer> intCoder = SerializableCoder.of(Integer.class);
@@ -331,7 +341,7 @@ public class AvroCoderTest {
     Assert.assertEquals(before, after);
 
     Integer intAfter = intCoder.decode(inStream, context);
-    Assert.assertEquals(new Integer(10), intAfter);
+    Assert.assertEquals(Integer.valueOf(10), intAfter);
   }
 
   @Test
@@ -340,11 +350,11 @@ public class AvroCoderTest {
     // Use MyRecord as input and output types without explicitly specifying
     // a coder (this uses the default coders, which may not be AvroCoder).
     PCollection<String> output =
-        pipeline.apply(Create.of(new Pojo("hello", 1), new Pojo("world", 2)))
+        pipeline
+            .apply(Create.of(new Pojo("hello", 1, DATETIME_A), new Pojo("world", 2, DATETIME_B)))
             .apply(ParDo.of(new GetTextFn()));
 
-    PAssert.that(output)
-        .containsInAnyOrder("hello", "world");
+    PAssert.that(output).containsInAnyOrder("hello", "world");
     pipeline.run();
   }
 
@@ -364,14 +374,13 @@ public class AvroCoderTest {
     }
   }
 
-  private void assertNonDeterministic(AvroCoder<?> coder,
-      Matcher<String> reason1) {
+  private void assertNonDeterministic(AvroCoder<?> coder, Matcher<String> reason1) {
     try {
       coder.verifyDeterministic();
       fail("Expected " + coder + " to be non-deterministic.");
     } catch (NonDeterministicException e) {
-      assertThat(e.getReasons(), Matchers.<String>iterableWithSize(1));
-      assertThat(e.getReasons(), Matchers.<String>contains(reason1));
+      assertThat(e.getReasons(), Matchers.iterableWithSize(1));
+      assertThat(e.getReasons(), Matchers.contains(reason1));
     }
   }
 
@@ -388,10 +397,13 @@ public class AvroCoderTest {
   private static class SimpleDeterministicClass {
     @SuppressWarnings("unused")
     private Integer intField;
+
     @SuppressWarnings("unused")
     private char charField;
+
     @SuppressWarnings("unused")
     private Integer[] intArray;
+
     @SuppressWarnings("unused")
     private Utf8 utf8field;
   }
@@ -410,8 +422,8 @@ public class AvroCoderTest {
     return new TypeSafeMatcher<String>(String.class) {
       @Override
       public void describeTo(Description description) {
-        description.appendText(String.format("Reason starting with '%s:' containing '%s'",
-            prefix, messagePart));
+        description.appendText(
+            String.format("Reason starting with '%s:' containing '%s'", prefix, messagePart));
       }
 
       @Override
@@ -425,15 +437,17 @@ public class AvroCoderTest {
     return reason(clazz.getName(), message);
   }
 
-  private Matcher<String> reasonField(
-      Class<?> clazz, String field, String message) {
+  private Matcher<String> reasonField(Class<?> clazz, String field, String message) {
     return reason(clazz.getName() + "#" + field, message);
   }
 
   @Test
   public void testDeterministicUnorderedMap() {
-    assertNonDeterministic(AvroCoder.of(UnorderedMapClass.class),
-        reasonField(UnorderedMapClass.class, "mapField",
+    assertNonDeterministic(
+        AvroCoder.of(UnorderedMapClass.class),
+        reasonField(
+            UnorderedMapClass.class,
+            "mapField",
             "java.util.Map<java.lang.String, java.lang.String> "
                 + "may not be deterministically ordered"));
   }
@@ -442,23 +456,26 @@ public class AvroCoderTest {
     @SuppressWarnings("unused")
     private UnorderedMapClass[] arrayField;
   }
+
   @Test
   public void testDeterministicNonDeterministicArray() {
-    assertNonDeterministic(AvroCoder.of(NonDeterministicArray.class),
-        reasonField(UnorderedMapClass.class, "mapField",
+    assertNonDeterministic(
+        AvroCoder.of(NonDeterministicArray.class),
+        reasonField(
+            UnorderedMapClass.class,
+            "mapField",
             "java.util.Map<java.lang.String, java.lang.String>"
                 + " may not be deterministically ordered"));
   }
 
   private static class SubclassOfUnorderedMapClass extends UnorderedMapClass {}
 
-
   @Test
   public void testDeterministicNonDeterministicChild() {
     // Super class has non deterministic fields.
-    assertNonDeterministic(AvroCoder.of(SubclassOfUnorderedMapClass.class),
-        reasonField(UnorderedMapClass.class, "mapField",
-            "may not be deterministically ordered"));
+    assertNonDeterministic(
+        AvroCoder.of(SubclassOfUnorderedMapClass.class),
+        reasonField(UnorderedMapClass.class, "mapField", "may not be deterministically ordered"));
   }
 
   private static class SubclassHidingParent extends UnorderedMapClass {
@@ -505,8 +522,11 @@ public class AvroCoderTest {
   @Test
   public void testDeterminismTreeMapValue() {
     // The value is non-deterministic, so we should fail.
-    assertNonDeterministic(AvroCoder.of(TreeMapNonDetValue.class),
-        reasonField(UnorderedMapClass.class, "mapField",
+    assertNonDeterministic(
+        AvroCoder.of(TreeMapNonDetValue.class),
+        reasonField(
+            UnorderedMapClass.class,
+            "mapField",
             "java.util.Map<java.lang.String, java.lang.String> "
                 + "may not be deterministically ordered"));
   }
@@ -519,8 +539,11 @@ public class AvroCoderTest {
   @Test
   public void testDeterminismUnorderedMap() {
     // LinkedHashMap is not deterministically ordered, so we should fail.
-    assertNonDeterministic(AvroCoder.of(LinkedHashMapField.class),
-        reasonField(LinkedHashMapField.class, "nonDeterministicMap",
+    assertNonDeterministic(
+        AvroCoder.of(LinkedHashMapField.class),
+        reasonField(
+            LinkedHashMapField.class,
+            "nonDeterministicMap",
             "java.util.LinkedHashMap<java.lang.String, java.lang.String> "
                 + "may not be deterministically ordered"));
   }
@@ -532,8 +555,11 @@ public class AvroCoderTest {
 
   @Test
   public void testDeterminismCollection() {
-    assertNonDeterministic(AvroCoder.of(StringCollection.class),
-        reasonField(StringCollection.class, "stringCollection",
+    assertNonDeterministic(
+        AvroCoder.of(StringCollection.class),
+        reasonField(
+            StringCollection.class,
+            "stringCollection",
             "java.util.Collection<java.lang.String> may not be deterministically ordered"));
   }
 
@@ -562,12 +588,15 @@ public class AvroCoderTest {
   public void testDeterminismSet() {
     assertDeterministic(AvroCoder.of(StringSortedSet.class));
     assertDeterministic(AvroCoder.of(StringTreeSet.class));
-    assertNonDeterministic(AvroCoder.of(StringHashSet.class),
-        reasonField(StringHashSet.class, "stringCollection",
+    assertNonDeterministic(
+        AvroCoder.of(StringHashSet.class),
+        reasonField(
+            StringHashSet.class,
+            "stringCollection",
             "java.util.HashSet<java.lang.String> may not be deterministically ordered"));
   }
 
-  private static class StringSortedSet{
+  private static class StringSortedSet {
     @SuppressWarnings("unused")
     SortedSet<String> stringCollection;
   }
@@ -584,12 +613,12 @@ public class AvroCoderTest {
 
   @Test
   public void testDeterminismCollectionValue() {
-    assertNonDeterministic(AvroCoder.of(OrderedSetOfNonDetValues.class),
-        reasonField(UnorderedMapClass.class, "mapField",
-            "may not be deterministically ordered"));
-    assertNonDeterministic(AvroCoder.of(ListOfNonDetValues.class),
-        reasonField(UnorderedMapClass.class, "mapField",
-            "may not be deterministically ordered"));
+    assertNonDeterministic(
+        AvroCoder.of(OrderedSetOfNonDetValues.class),
+        reasonField(UnorderedMapClass.class, "mapField", "may not be deterministically ordered"));
+    assertNonDeterministic(
+        AvroCoder.of(ListOfNonDetValues.class),
+        reasonField(UnorderedMapClass.class, "mapField", "may not be deterministically ordered"));
   }
 
   private static class OrderedSetOfNonDetValues {
@@ -605,36 +634,42 @@ public class AvroCoderTest {
   @Test
   public void testDeterminismUnion() {
     assertDeterministic(AvroCoder.of(DeterministicUnionBase.class));
-    assertNonDeterministic(AvroCoder.of(NonDeterministicUnionBase.class),
+    assertNonDeterministic(
+        AvroCoder.of(NonDeterministicUnionBase.class),
         reasonField(UnionCase3.class, "mapField", "may not be deterministically ordered"));
   }
 
   @Test
   public void testDeterminismStringable() {
     assertDeterministic(AvroCoder.of(String.class));
-    assertNonDeterministic(AvroCoder.of(StringableClass.class),
+    assertNonDeterministic(
+        AvroCoder.of(StringableClass.class),
         reasonClass(StringableClass.class, "may not have deterministic #toString()"));
   }
 
   @Stringable
-  private static class StringableClass {
-  }
+  private static class StringableClass {}
 
   @Test
   public void testDeterminismCyclicClass() {
-    assertNonDeterministic(AvroCoder.of(Cyclic.class),
+    assertNonDeterministic(
+        AvroCoder.of(Cyclic.class),
         reasonField(Cyclic.class, "cyclicField", "appears recursively"));
-    assertNonDeterministic(AvroCoder.of(CyclicField.class),
-        reasonField(Cyclic.class, "cyclicField",
-    Cyclic.class.getName() + " appears recursively"));
-    assertNonDeterministic(AvroCoder.of(IndirectCycle1.class),
-        reasonField(IndirectCycle2.class, "field2",
-    IndirectCycle1.class.getName() +  " appears recursively"));
+    assertNonDeterministic(
+        AvroCoder.of(CyclicField.class),
+        reasonField(Cyclic.class, "cyclicField", Cyclic.class.getName() + " appears recursively"));
+    assertNonDeterministic(
+        AvroCoder.of(IndirectCycle1.class),
+        reasonField(
+            IndirectCycle2.class,
+            "field2",
+            IndirectCycle1.class.getName() + " appears recursively"));
   }
 
   private static class Cyclic {
     @SuppressWarnings("unused")
     int intField;
+
     @SuppressWarnings("unused")
     Cyclic cyclicField;
   }
@@ -660,27 +695,31 @@ public class AvroCoderTest {
   }
 
   private static class HasGenericRecord {
-    @AvroSchema("{\"name\": \"bar\", \"type\": \"record\", \"fields\": ["
-        + "{\"name\": \"foo\", \"type\": \"int\"}]}")
+    @AvroSchema(
+        "{\"name\": \"bar\", \"type\": \"record\", \"fields\": ["
+            + "{\"name\": \"foo\", \"type\": \"int\"}]}")
     GenericRecord genericRecord;
   }
 
   @Test
   public void testDeterminismHasCustomSchema() {
-    assertNonDeterministic(AvroCoder.of(HasCustomSchema.class),
-        reasonField(HasCustomSchema.class, "withCustomSchema",
+    assertNonDeterministic(
+        AvroCoder.of(HasCustomSchema.class),
+        reasonField(
+            HasCustomSchema.class,
+            "withCustomSchema",
             "Custom schemas are only supported for subtypes of IndexedRecord."));
   }
 
   private static class HasCustomSchema {
-    @AvroSchema("{\"name\": \"bar\", \"type\": \"record\", \"fields\": ["
-        + "{\"name\": \"foo\", \"type\": \"int\"}]}")
+    @AvroSchema(
+        "{\"name\": \"bar\", \"type\": \"record\", \"fields\": ["
+            + "{\"name\": \"foo\", \"type\": \"int\"}]}")
     int withCustomSchema;
   }
 
   @Test
-  public void testAvroCoderTreeMapDeterminism()
-      throws Exception, NonDeterministicException {
+  public void testAvroCoderTreeMapDeterminism() throws Exception, NonDeterministicException {
     TreeMapField size1 = new TreeMapField();
     TreeMapField size2 = new TreeMapField();
 
@@ -701,20 +740,21 @@ public class AvroCoderTest {
     coder.encode(size1, outStream1, context);
     coder.encode(size2, outStream2, context);
 
-    assertTrue(Arrays.equals(
-        outStream1.toByteArray(), outStream2.toByteArray()));
+    assertArrayEquals(outStream1.toByteArray(), outStream2.toByteArray());
   }
 
   private static class TreeMapField {
     private TreeMap<String, String> field = new TreeMap<>();
   }
 
-  @Union({ UnionCase1.class, UnionCase2.class })
+  @Union({UnionCase1.class, UnionCase2.class})
   private abstract static class DeterministicUnionBase {}
 
-  @Union({ UnionCase1.class, UnionCase2.class, UnionCase3.class })
+  @Union({UnionCase1.class, UnionCase2.class, UnionCase3.class})
   private abstract static class NonDeterministicUnionBase {}
+
   private static class UnionCase1 extends DeterministicUnionBase {}
+
   private static class UnionCase2 extends DeterministicUnionBase {
     @SuppressWarnings("unused")
     String field;
@@ -727,79 +767,155 @@ public class AvroCoderTest {
 
   @Test
   public void testAvroCoderSimpleSchemaDeterminism() {
-    assertDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields()
-        .endRecord()));
-    assertDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields()
-        .name("int").type().intType().noDefault()
-        .endRecord()));
-    assertDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields()
-        .name("string").type().stringType().noDefault()
-        .endRecord()));
+    assertDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields().endRecord()));
+    assertDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("someRecord")
+                .fields()
+                .name("int")
+                .type()
+                .intType()
+                .noDefault()
+                .endRecord()));
+    assertDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("someRecord")
+                .fields()
+                .name("string")
+                .type()
+                .stringType()
+                .noDefault()
+                .endRecord()));
 
-    assertNonDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields()
-        .name("map").type().map().values().stringType().noDefault()
-        .endRecord()),
+    assertNonDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("someRecord")
+                .fields()
+                .name("map")
+                .type()
+                .map()
+                .values()
+                .stringType()
+                .noDefault()
+                .endRecord()),
         reason("someRecord.map", "HashMap to represent MAPs"));
 
-    assertDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields()
-        .name("array").type().array().items().stringType().noDefault()
-        .endRecord()));
+    assertDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("someRecord")
+                .fields()
+                .name("array")
+                .type()
+                .array()
+                .items()
+                .stringType()
+                .noDefault()
+                .endRecord()));
 
-    assertDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields()
-        .name("enum").type().enumeration("anEnum").symbols("s1", "s2").enumDefault("s1")
-        .endRecord()));
+    assertDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("someRecord")
+                .fields()
+                .name("enum")
+                .type()
+                .enumeration("anEnum")
+                .symbols("s1", "s2")
+                .enumDefault("s1")
+                .endRecord()));
 
-    assertDeterministic(AvroCoder.of(SchemaBuilder.unionOf()
-        .intType().and()
-        .record("someRecord").fields().nullableString("someField", "").endRecord()
-        .endUnion()));
+    assertDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.unionOf()
+                .intType()
+                .and()
+                .record("someRecord")
+                .fields()
+                .nullableString("someField", "")
+                .endRecord()
+                .endUnion()));
   }
 
   @Test
   public void testAvroCoderStrings() {
     // Custom Strings in Records
-    assertDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields()
-        .name("string").prop(SpecificData.CLASS_PROP, "java.lang.String")
-        .type().stringType().noDefault()
-        .endRecord()));
-    assertNonDeterministic(AvroCoder.of(SchemaBuilder.record("someRecord").fields()
-        .name("string").prop(SpecificData.CLASS_PROP, "unknownString")
-        .type().stringType().noDefault()
-        .endRecord()),
+    assertDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("someRecord")
+                .fields()
+                .name("string")
+                .prop(SpecificData.CLASS_PROP, "java.lang.String")
+                .type()
+                .stringType()
+                .noDefault()
+                .endRecord()));
+    assertNonDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("someRecord")
+                .fields()
+                .name("string")
+                .prop(SpecificData.CLASS_PROP, "unknownString")
+                .type()
+                .stringType()
+                .noDefault()
+                .endRecord()),
         reason("someRecord.string", "unknownString is not known to be deterministic"));
 
     // Custom Strings in Unions
-    assertNonDeterministic(AvroCoder.of(SchemaBuilder.unionOf()
-        .intType().and()
-        .record("someRecord").fields()
-        .name("someField").prop(SpecificData.CLASS_PROP, "unknownString")
-        .type().stringType().noDefault().endRecord()
-        .endUnion()),
+    assertNonDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.unionOf()
+                .intType()
+                .and()
+                .record("someRecord")
+                .fields()
+                .name("someField")
+                .prop(SpecificData.CLASS_PROP, "unknownString")
+                .type()
+                .stringType()
+                .noDefault()
+                .endRecord()
+                .endUnion()),
         reason("someRecord.someField", "unknownString is not known to be deterministic"));
   }
 
   @Test
   public void testAvroCoderNestedRecords() {
     // Nested Record
-    assertDeterministic(AvroCoder.of(SchemaBuilder.record("nestedRecord").fields()
-        .name("subRecord").type().record("subRecord").fields()
-            .name("innerField").type().stringType().noDefault()
-        .endRecord().noDefault()
-        .endRecord()));
+    assertDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("nestedRecord")
+                .fields()
+                .name("subRecord")
+                .type()
+                .record("subRecord")
+                .fields()
+                .name("innerField")
+                .type()
+                .stringType()
+                .noDefault()
+                .endRecord()
+                .noDefault()
+                .endRecord()));
   }
 
   @Test
   public void testAvroCoderCyclicRecords() {
     // Recursive record
-    assertNonDeterministic(AvroCoder.of(SchemaBuilder.record("cyclicRecord").fields()
-        .name("cycle").type("cyclicRecord").noDefault()
-        .endRecord()),
+    assertNonDeterministic(
+        AvroCoder.of(
+            SchemaBuilder.record("cyclicRecord")
+                .fields()
+                .name("cycle")
+                .type("cyclicRecord")
+                .noDefault()
+                .endRecord()),
         reason("cyclicRecord.cycle", "cyclicRecord appears recursively"));
   }
 
   private static class NullableField {
     @SuppressWarnings("unused")
-    @Nullable private String nullable;
+    @Nullable
+    private String nullable;
   }
 
   @Test
@@ -809,30 +925,36 @@ public class AvroCoderTest {
 
   private static class NullableNonDeterministicField {
     @SuppressWarnings("unused")
-    @Nullable private NonDeterministicArray nullableNonDetArray;
+    @Nullable
+    private NonDeterministicArray nullableNonDetArray;
   }
 
   private static class NullableCyclic {
     @SuppressWarnings("unused")
-    @Nullable private NullableCyclic nullableNullableCyclicField;
+    @Nullable
+    private NullableCyclic nullableNullableCyclicField;
   }
 
   private static class NullableCyclicField {
     @SuppressWarnings("unused")
-    @Nullable private Cyclic nullableCyclicField;
+    @Nullable
+    private Cyclic nullableCyclicField;
   }
 
   @Test
   public void testNullableNonDeterministicField() {
-    assertNonDeterministic(AvroCoder.of(NullableCyclic.class),
-        reasonField(NullableCyclic.class, "nullableNullableCyclicField",
+    assertNonDeterministic(
+        AvroCoder.of(NullableCyclic.class),
+        reasonField(
+            NullableCyclic.class,
+            "nullableNullableCyclicField",
             NullableCyclic.class.getName() + " appears recursively"));
-    assertNonDeterministic(AvroCoder.of(NullableCyclicField.class),
-        reasonField(Cyclic.class, "cyclicField",
-            Cyclic.class.getName() + " appears recursively"));
-    assertNonDeterministic(AvroCoder.of(NullableNonDeterministicField.class),
-        reasonField(UnorderedMapClass.class, "mapField",
-            " may not be deterministically ordered"));
+    assertNonDeterministic(
+        AvroCoder.of(NullableCyclicField.class),
+        reasonField(Cyclic.class, "cyclicField", Cyclic.class.getName() + " appears recursively"));
+    assertNonDeterministic(
+        AvroCoder.of(NullableNonDeterministicField.class),
+        reasonField(UnorderedMapClass.class, "mapField", " may not be deterministically ordered"));
   }
 
   /**
@@ -846,7 +968,8 @@ public class AvroCoderTest {
     AvroCoder<GenericWithAnnotation<String>> coder =
         (AvroCoder) AvroCoder.of(GenericWithAnnotation.class);
 
-    assertThat(coder.getSchema().getField("onlySomeTypesAllowed").schema().getType(),
+    assertThat(
+        coder.getSchema().getField("onlySomeTypesAllowed").schema().getType(),
         equalTo(Schema.Type.UNION));
 
     CoderProperties.coderDecodeEncodeEqual(coder, new GenericWithAnnotation<>("hello"));
@@ -862,7 +985,7 @@ public class AvroCoderTest {
 
     // For deserialization only
     @SuppressWarnings("unused")
-    protected GenericWithAnnotation() { }
+    protected GenericWithAnnotation() {}
 
     @Override
     public boolean equals(Object other) {
@@ -879,18 +1002,22 @@ public class AvroCoderTest {
   @Test
   public void testAvroCoderForGenerics() throws Exception {
     Schema fooSchema = AvroCoder.of(Foo.class).getSchema();
-    Schema schema = new Schema.Parser().parse("{"
-        + "\"type\":\"record\","
-        + "\"name\":\"SomeGeneric\","
-        + "\"namespace\":\"ns\","
-        + "\"fields\":["
-        + "  {\"name\":\"foo\", \"type\":" + fooSchema.toString() + "}"
-        + "]}");
+    Schema schema =
+        new Schema.Parser()
+            .parse(
+                "{"
+                    + "\"type\":\"record\","
+                    + "\"name\":\"SomeGeneric\","
+                    + "\"namespace\":\"ns\","
+                    + "\"fields\":["
+                    + "  {\"name\":\"foo\", \"type\":"
+                    + fooSchema.toString()
+                    + "}"
+                    + "]}");
     @SuppressWarnings("rawtypes")
     AvroCoder<SomeGeneric> coder = AvroCoder.of(SomeGeneric.class, schema);
 
-    assertNonDeterministic(coder,
-        reasonField(SomeGeneric.class, "foo", "erasure"));
+    assertNonDeterministic(coder, reasonField(SomeGeneric.class, "foo", "erasure"));
   }
 
   @Test
@@ -903,6 +1030,7 @@ public class AvroCoderTest {
     @SuppressWarnings("unused")
     private T foo;
   }
+
   private static class Foo {
     @SuppressWarnings("unused")
     String id;

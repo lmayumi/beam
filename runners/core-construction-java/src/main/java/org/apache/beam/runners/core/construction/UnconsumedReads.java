@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.core.construction;
 
 import java.util.HashSet;
@@ -46,8 +45,8 @@ public class UnconsumedReads {
 
           @Override
           public void visitValue(PValue value, Node producer) {
-            if (producer.getTransform() instanceof Read.Bounded
-                || producer.getTransform() instanceof Read.Unbounded) {
+            String urn = PTransformTranslation.urnForTransformOrNull(producer.getTransform());
+            if (PTransformTranslation.READ_TRANSFORM_URN.equals(urn)) {
               unconsumed.add((PCollection<?>) value);
             }
           }
@@ -62,7 +61,7 @@ public class UnconsumedReads {
   private static <T> void consume(PCollection<T> unconsumedPCollection, int uniq) {
     // Multiple applications should never break due to stable unique names.
     String uniqueName = "DropInputs" + (uniq == 0 ? "" : uniq);
-    unconsumedPCollection.apply(uniqueName, ParDo.of(new NoOpDoFn<T>()));
+    unconsumedPCollection.apply(uniqueName, ParDo.of(new NoOpDoFn<>()));
   }
 
   private static class NoOpDoFn<T> extends DoFn<T, T> {

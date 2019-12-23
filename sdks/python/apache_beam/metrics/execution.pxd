@@ -16,16 +16,30 @@
 #
 
 cimport cython
+cimport libc.stdint
+
+from apache_beam.metrics.cells cimport MetricCell
+
+
+cdef object get_current_tracker
+
+
+cdef class _TypedMetricName(object):
+  cdef readonly object cell_type
+  cdef readonly object metric_name
+  cdef readonly object fast_name
+  cdef libc.stdint.int64_t _hash
+
+
+cdef object _DEFAULT
+
+
+cdef class MetricUpdater(object):
+  cdef _TypedMetricName typed_metric_name
+  cdef object default
 
 
 cdef class MetricsContainer(object):
   cdef object step_name
-  cdef public object counters
-  cdef public object distributions
-
-
-cdef class ScopedMetricsContainer(object):
-  cpdef enter(self)
-  cpdef exit(self)
-  cdef list _stack
-  cdef MetricsContainer _container
+  cdef public dict metrics
+  cpdef MetricCell get_metric_cell(self, metric_key)

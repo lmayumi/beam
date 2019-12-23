@@ -15,34 +15,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.sdk.extensions.sql.impl.rule;
 
 import org.apache.beam.sdk.extensions.sql.impl.rel.BeamLogicalConvention;
 import org.apache.beam.sdk.extensions.sql.impl.rel.BeamValuesRel;
-import org.apache.calcite.plan.Convention;
-import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.convert.ConverterRule;
-import org.apache.calcite.rel.core.Values;
-import org.apache.calcite.rel.logical.LogicalValues;
+import org.apache.beam.vendor.calcite.v1_20_0.org.apache.calcite.plan.Convention;
+import org.apache.beam.vendor.calcite.v1_20_0.org.apache.calcite.rel.RelNode;
+import org.apache.beam.vendor.calcite.v1_20_0.org.apache.calcite.rel.convert.ConverterRule;
+import org.apache.beam.vendor.calcite.v1_20_0.org.apache.calcite.rel.core.Values;
+import org.apache.beam.vendor.calcite.v1_20_0.org.apache.calcite.rel.logical.LogicalValues;
 
-/**
- * {@code ConverterRule} to replace {@code Values} with {@code BeamValuesRel}.
- */
+/** {@code ConverterRule} to replace {@code Values} with {@code BeamValuesRel}. */
 public class BeamValuesRule extends ConverterRule {
   public static final BeamValuesRule INSTANCE = new BeamValuesRule();
+
   private BeamValuesRule() {
-    super(LogicalValues.class, Convention.NONE,
-        BeamLogicalConvention.INSTANCE, "BeamValuesRule");
+    super(LogicalValues.class, Convention.NONE, BeamLogicalConvention.INSTANCE, "BeamValuesRule");
   }
 
-  @Override public RelNode convert(RelNode rel) {
+  @Override
+  public RelNode convert(RelNode rel) {
     Values values = (Values) rel;
     return new BeamValuesRel(
         values.getCluster(),
         values.getRowType(),
         values.getTuples(),
-        values.getTraitSet().replace(BeamLogicalConvention.INSTANCE)
-    );
+        values.getTraitSet().replace(BeamLogicalConvention.INSTANCE));
   }
 }

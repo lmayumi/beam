@@ -16,20 +16,15 @@
  * limitations under the License.
  */
 
-apply from: project(":").file("build_rules.gradle")
-applyJavaNature()
+plugins { id 'org.apache.beam.module' }
+applyJavaNature(exportJavadoc: false, automaticModuleName: 'org.apache.beam.sdk.io.common')
 
 description = "Apache Beam :: SDKs :: Java :: IO :: Common"
+ext.summary = "Code used by all Beam IOs"
 
 dependencies {
-  compile library.java.guava
-  shadow project(path: ":beam-sdks-parent:beam-sdks-java-parent:beam-sdks-java-core", configuration: "shadow")
+  testCompile library.java.vendored_guava_26_0_jre
   testCompile library.java.junit
+  testCompile library.java.postgres
+  testCompile project(path: ":sdks:java:core", configuration: "shadow")
 }
-
-task packageTests(type: Jar) {
-  from sourceSets.test.output
-  classifier = "tests"
-}
-
-artifacts.archives packageTests

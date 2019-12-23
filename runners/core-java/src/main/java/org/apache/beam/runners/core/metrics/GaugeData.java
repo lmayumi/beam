@@ -15,17 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.core.metrics;
 
 import com.google.auto.value.AutoValue;
 import java.io.Serializable;
 import org.apache.beam.sdk.metrics.GaugeResult;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.joda.time.Instant;
 
 /**
- * Data describing the gauge. This should retain enough detail that it can be combined with
- * other {@link GaugeData}.
+ * Data describing the gauge. This should retain enough detail that it can be combined with other
+ * {@link GaugeData}.
  */
 @AutoValue
 public abstract class GaugeData implements Serializable {
@@ -54,16 +54,13 @@ public abstract class GaugeData implements Serializable {
     return GaugeResult.create(value(), timestamp());
   }
 
-  /**
-   * Empty {@link GaugeData}, representing no values reported.
-   */
+  /** Empty {@link GaugeData}, representing no values reported. */
   public static class EmptyGaugeData extends GaugeData {
 
     private static final EmptyGaugeData INSTANCE = new EmptyGaugeData();
-    private static final Instant EPOCH = new Instant(0);
+    private static final Instant EPOCH = new Instant(GlobalWindow.TIMESTAMP_MIN_VALUE);
 
-    private EmptyGaugeData() {
-    }
+    private EmptyGaugeData() {}
 
     @Override
     public long value() {

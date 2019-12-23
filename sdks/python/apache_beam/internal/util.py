@@ -20,10 +20,23 @@
 For internal use only. No backwards compatibility guarantees.
 """
 
+from __future__ import absolute_import
+
 import logging
 import threading
 import weakref
+from builtins import object
 from multiprocessing.pool import ThreadPool
+from typing import Any
+from typing import Dict
+from typing import Iterable
+from typing import List
+from typing import Tuple
+from typing import Type
+from typing import TypeVar
+from typing import Union
+
+T = TypeVar('T')
 
 
 class ArgumentPlaceholder(object):
@@ -51,8 +64,19 @@ class ArgumentPlaceholder(object):
     """
     return isinstance(other, ArgumentPlaceholder)
 
+  def __ne__(self, other):
+    # TODO(BEAM-5949): Needed for Python 2 compatibility.
+    return not self == other
 
-def remove_objects_from_args(args, kwargs, pvalue_classes):
+  def __hash__(self):
+    return hash(type(self))
+
+
+def remove_objects_from_args(args,  # type: Iterable[Any]
+                             kwargs,  # type: Dict[str, Any]
+                             pvalue_class  # type: Union[Type[T], Tuple[Type[T], ...]]
+                            ):
+  # type: (...) -> Tuple[List[Any], Dict[str, Any], List[T]]
   """For internal use only; no backwards-compatibility guarantees.
 
   Replaces all objects of a given type in args/kwargs with a placeholder.
@@ -60,9 +84,8 @@ def remove_objects_from_args(args, kwargs, pvalue_classes):
   Args:
     args: A list of positional arguments.
     kwargs: A dictionary of keyword arguments.
-    pvalue_classes: A tuple of class objects representing the types of the
-      arguments that must be replaced with a placeholder value (instance of
-      ArgumentPlaceholder)
+    pvalue_class: A class object representing the types of arguments that must
+      be replaced with a placeholder value (instance of ArgumentPlaceholder).
 
   Returns:
     A 3-tuple containing a modified list of positional arguments, a modified
@@ -74,12 +97,12 @@ def remove_objects_from_args(args, kwargs, pvalue_classes):
   def swapper(value):
     pvals.append(value)
     return ArgumentPlaceholder()
-  new_args = [swapper(v) if isinstance(v, pvalue_classes) else v for v in args]
+  new_args = [swapper(v) if isinstance(v, pvalue_class) else v for v in args]
   # Make sure the order in which we process the dictionary keys is predictable
   # by sorting the entries first. This will be important when putting back
   # PValues.
-  new_kwargs = dict((k, swapper(v)) if isinstance(v, pvalue_classes) else (k, v)
-                    for k, v in sorted(kwargs.iteritems()))
+  new_kwargs = dict((k, swapper(v)) if isinstance(v, pvalue_class) else (k, v)
+                    for k, v in sorted(kwargs.items()))
   return (new_args, new_kwargs, pvals)
 
 
@@ -104,7 +127,7 @@ def insert_values_in_args(args, kwargs, values):
       for arg in args]
   new_kwargs = dict(
       (k, next(v_iter)) if isinstance(v, ArgumentPlaceholder) else (k, v)
-      for k, v in sorted(kwargs.iteritems()))
+      for k, v in sorted(kwargs.items()))
   return (new_args, new_kwargs)
 
 

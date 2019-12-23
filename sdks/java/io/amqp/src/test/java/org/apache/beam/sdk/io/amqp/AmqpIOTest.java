@@ -23,7 +23,6 @@ import static org.junit.Assert.assertTrue;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-
 import org.apache.activemq.junit.EmbeddedActiveMQBroker;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -40,9 +39,7 @@ import org.junit.runners.JUnit4;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Tests on {@link AmqpIO}.
- */
+/** Tests on {@link AmqpIO}. */
 @RunWith(JUnit4.class)
 public class AmqpIOTest {
 
@@ -54,10 +51,12 @@ public class AmqpIOTest {
 
   @Test
   public void testRead() throws Exception {
-    PCollection<Message> output = pipeline.apply(AmqpIO.read()
-        .withMaxNumRecords(100)
-        .withAddresses(Collections.singletonList(broker.getQueueUri("testRead"))));
-    PAssert.thatSingleton(output.apply(Count.<Message>globally())).isEqualTo(100L);
+    PCollection<Message> output =
+        pipeline.apply(
+            AmqpIO.read()
+                .withMaxNumRecords(100)
+                .withAddresses(Collections.singletonList(broker.getQueueUri("testRead"))));
+    PAssert.thatSingleton(output.apply(Count.globally())).isEqualTo(100L);
 
     Messenger sender = Messenger.Factory.create();
     sender.start();
@@ -120,5 +119,4 @@ public class AmqpIOTest {
       return getBrokerService().getDefaultSocketURIString() + "/" + queueName;
     }
   }
-
 }

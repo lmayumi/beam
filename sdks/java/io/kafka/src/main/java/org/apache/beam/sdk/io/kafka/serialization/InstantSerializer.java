@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.sdk.io.kafka.serialization;
 
 import java.util.Map;
@@ -41,4 +40,4 @@ public class InstantSerializer implements Serializer<Instant> {
 
   @Override
   public void close() {}
-};
+}

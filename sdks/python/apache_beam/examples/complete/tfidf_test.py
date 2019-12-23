@@ -17,6 +17,8 @@
 
 """Test for the TF-IDF example."""
 
+from __future__ import absolute_import
+
 import logging
 import os
 import re
@@ -39,15 +41,15 @@ EXPECTED_RESULTS = set([
     ('def', '2.txt', 0.2027325540540822)])
 
 
-EXPECTED_LINE_RE = r'\(u\'([a-z]*)\', \(\'.*([0-9]\.txt)\', (.*)\)\)'
+EXPECTED_LINE_RE = r'\(u?\'([a-z]*)\', \(\'.*([0-9]\.txt)\', (.*)\)\)'
 
 
 class TfIdfTest(unittest.TestCase):
 
   def create_file(self, path, contents):
     logging.info('Creating temp file: %s', path)
-    with open(path, 'w') as f:
-      f.write(contents)
+    with open(path, 'wb') as f:
+      f.write(contents.encode('utf-8'))
 
   def test_tfidf_transform(self):
     with TestPipeline() as p:
@@ -75,9 +77,10 @@ class TfIdfTest(unittest.TestCase):
     self.create_file(os.path.join(temp_folder, '1.txt'), 'abc def ghi')
     self.create_file(os.path.join(temp_folder, '2.txt'), 'abc def')
     self.create_file(os.path.join(temp_folder, '3.txt'), 'abc')
-    tfidf.run([
-        '--uris=%s/*' % temp_folder,
-        '--output', os.path.join(temp_folder, 'result')])
+    tfidf.run(
+        ['--uris=%s/*' % temp_folder,
+         '--output', os.path.join(temp_folder, 'result')],
+        save_main_session=False)
     # Parse result file and compare.
     results = []
     with open_shards(os.path.join(

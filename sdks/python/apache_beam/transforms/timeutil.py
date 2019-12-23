@@ -21,6 +21,11 @@ from __future__ import absolute_import
 
 from abc import ABCMeta
 from abc import abstractmethod
+from builtins import object
+
+from future.utils import with_metaclass
+
+from apache_beam.portability.api import beam_runner_api_pb2
 
 __all__ = [
     'TimeDomain',
@@ -34,6 +39,13 @@ class TimeDomain(object):
   REAL_TIME = 'REAL_TIME'
   DEPENDENT_REAL_TIME = 'DEPENDENT_REAL_TIME'
 
+  _RUNNER_API_MAPPING = {
+      WATERMARK: beam_runner_api_pb2.TimeDomain.EVENT_TIME,
+      REAL_TIME: beam_runner_api_pb2.TimeDomain.PROCESSING_TIME,
+      DEPENDENT_REAL_TIME:
+      beam_runner_api_pb2.TimeDomain.SYNCHRONIZED_PROCESSING_TIME,
+  }
+
   @staticmethod
   def from_string(domain):
     if domain in (TimeDomain.WATERMARK,
@@ -42,19 +54,21 @@ class TimeDomain(object):
       return domain
     raise ValueError('Unknown time domain: %s' % domain)
 
+  @staticmethod
+  def to_runner_api(domain):
+    return TimeDomain._RUNNER_API_MAPPING[domain]
 
-class TimestampCombinerImpl(object):
+
+class TimestampCombinerImpl(with_metaclass(ABCMeta, object)):  # type: ignore[misc]
   """Implementation of TimestampCombiner."""
-
-  __metaclass__ = ABCMeta
 
   @abstractmethod
   def assign_output_time(self, window, input_timestamp):
-    pass
+    raise NotImplementedError
 
   @abstractmethod
   def combine(self, output_timestamp, other_output_timestamp):
-    pass
+    raise NotImplementedError
 
   def combine_all(self, merging_timestamps):
     """Apply combine to list of timestamps."""
@@ -62,7 +76,7 @@ class TimestampCombinerImpl(object):
     for output_time in merging_timestamps:
       if combined_output_time is None:
         combined_output_time = output_time
-      else:
+      elif output_time is not None:
         combined_output_time = self.combine(
             combined_output_time, output_time)
     return combined_output_time
@@ -72,13 +86,8 @@ class TimestampCombinerImpl(object):
     return self.combine_all(merging_timestamps)
 
 
-class DependsOnlyOnWindow(TimestampCombinerImpl):
+class DependsOnlyOnWindow(with_metaclass(ABCMeta, TimestampCombinerImpl)):  # type: ignore[misc]
   """TimestampCombinerImpl that only depends on the window."""
-
-  __metaclass__ = ABCMeta
-
-  def combine(self, output_timestamp, other_output_timestamp):
-    return output_timestamp
 
   def merge(self, result_window, unused_merging_timestamps):
     # Since we know that the result only depends on the window, we can ignore
@@ -124,4 +133,7 @@ class OutputAtEndOfWindowImpl(DependsOnlyOnWindow):
   """TimestampCombinerImpl outputting at end of window."""
 
   def assign_output_time(self, window, unused_input_timestamp):
-    return window.end
+    return window.max_timestamp()
+
+  def combine(self, output_timestamp, other_output_timestamp):
+    return max(output_timestamp, other_output_timestamp)

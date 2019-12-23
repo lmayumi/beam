@@ -23,7 +23,6 @@ import static org.junit.Assert.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.google.common.collect.ImmutableList;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.coders.VoidCoder;
@@ -37,34 +36,32 @@ import org.apache.beam.sdk.transforms.WithKeys;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 import org.joda.time.Instant;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@link ViewEvaluatorFactory}.
- */
+/** Tests for {@link ViewEvaluatorFactory}. */
 @RunWith(JUnit4.class)
 public class ViewEvaluatorFactoryTest {
   private BundleFactory bundleFactory = ImmutableListBundleFactory.create();
 
-  @Rule
-  public TestPipeline p = TestPipeline.create().enableAbandonedNodeEnforcement(false);
+  @Rule public TestPipeline p = TestPipeline.create().enableAbandonedNodeEnforcement(false);
 
   @Test
   public void testInMemoryEvaluator() throws Exception {
     PCollection<String> input = p.apply(Create.of("foo", "bar"));
-    PCollectionView<Iterable<String>> pCollectionView = input.apply(View.<String>asIterable());
+    PCollectionView<Iterable<String>> pCollectionView = input.apply(View.asIterable());
     PCollection<Iterable<String>> concat =
-        input.apply(WithKeys.<Void, String>of((Void) null))
+        input
+            .apply(WithKeys.of((Void) null))
             .setCoder(KvCoder.of(VoidCoder.of(), StringUtf8Coder.of()))
-            .apply(GroupByKey.<Void, String>create())
-            .apply(Values.<Iterable<String>>create());
+            .apply(GroupByKey.create())
+            .apply(Values.create());
     PCollection<Iterable<String>> view =
-        concat.apply(
-            new ViewOverrideFactory.WriteView<String, Iterable<String>>(pCollectionView));
+        concat.apply(new ViewOverrideFactory.WriteView<>(pCollectionView));
 
     EvaluationContext context = mock(EvaluationContext.class);
     TestViewWriter<String, Iterable<String>> viewWriter = new TestViewWriter<>();
@@ -73,11 +70,9 @@ public class ViewEvaluatorFactoryTest {
     CommittedBundle<String> inputBundle = bundleFactory.createBundle(input).commit(Instant.now());
     AppliedPTransform<?, ?, ?> producer = DirectGraphs.getProducer(view);
     TransformEvaluator<Iterable<String>> evaluator =
-        new ViewEvaluatorFactory(context)
-            .forApplication(producer, inputBundle);
+        new ViewEvaluatorFactory(context).forApplication(producer, inputBundle);
 
-    evaluator.processElement(
-        WindowedValue.<Iterable<String>>valueInGlobalWindow(ImmutableList.of("foo", "bar")));
+    evaluator.processElement(WindowedValue.valueInGlobalWindow(ImmutableList.of("foo", "bar")));
     assertThat(viewWriter.latest, nullValue());
 
     evaluator.finishBundle();

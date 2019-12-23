@@ -95,13 +95,14 @@ public class CombineFnTester {
       CombineFn<InputT, AccumT, OutputT> fn,
       List<? extends Iterable<InputT>> shards,
       Matcher<? super OutputT> matcher) {
-    AccumT accumulator = null;
+    AccumT accumulator = shards.isEmpty() ? fn.createAccumulator() : null;
     for (AccumT inputAccum : combineInputs(fn, shards)) {
       if (accumulator == null) {
         accumulator = inputAccum;
       } else {
         accumulator = fn.mergeAccumulators(Arrays.asList(accumulator, inputAccum));
       }
+      fn.extractOutput(accumulator); // Extract output to simulate multiple firings
     }
     assertThat(fn.extractOutput(accumulator), matcher);
   }
@@ -126,14 +127,12 @@ public class CombineFnTester {
   private static <T> List<List<T>> shardEvenly(List<T> input, int numShards) {
     List<List<T>> shards = new ArrayList<>(numShards);
     for (int i = 0; i < numShards; i++) {
-      shards.add(input.subList(i * input.size() / numShards,
-          (i + 1) * input.size() / numShards));
+      shards.add(input.subList(i * input.size() / numShards, (i + 1) * input.size() / numShards));
     }
     return shards;
   }
 
-  private static <T> List<List<T>> shardExponentially(
-      List<T> input, double base) {
+  private static <T> List<List<T>> shardExponentially(List<T> input, double base) {
     assert base > 1.0;
     List<List<T>> shards = new ArrayList<>();
     int end = input.size();

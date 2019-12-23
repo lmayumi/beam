@@ -30,7 +30,7 @@ A good starting point for new users is our set of
 
 1. [`MinimalWordCount`](https://github.com/apache/beam/blob/master/examples/java/src/main/java/org/apache/beam/examples/MinimalWordCount.java) is the simplest word count pipeline and introduces basic concepts like [Pipelines](https://beam.apache.org/documentation/programming-guide/#pipeline),
 [PCollections](https://beam.apache.org/documentation/programming-guide/#pcollection),
-[ParDo](https://beam.apache.org/documentation/programming-guide/#transforms-pardo),
+[ParDo](https://beam.apache.org/documentation/programming-guide/#pardo),
 and [reading and writing data](https://beam.apache.org/documentation/programming-guide/#io) from external storage.
 
 1. [`WordCount`](https://github.com/apache/beam/blob/master/examples/java/src/main/java/org/apache/beam/examples/WordCount.java) introduces best practices like [PipelineOptions](https://beam.apache.org/documentation/programming-guide/#pipeline) and custom [PTransforms](https://beam.apache.org/documentation/programming-guide/#transforms-composite).
@@ -52,10 +52,9 @@ directory for some common and useful patterns like joining, filtering, and combi
 The [complete](https://github.com/apache/beam/blob/master/examples/java/src/main/java/org/apache/beam/examples/complete)
 directory contains a few realistic end-to-end pipelines.
 
-See the
-[Java 8](https://github.com/apache/beam/tree/master/examples/java8/src/main/java/org/apache/beam/examples)
-examples as well. This directory includes a Java 8 version of the
-MinimalWordCount example, as well as series of examples in a simple 'mobile
-gaming' domain. This series introduces some advanced concepts and provides
-additional examples of using Java 8 syntax. Other than usage of Java 8 lambda
-expressions, the concepts that are used apply equally well in Java 7.
+See the other examples as well. This directory includes a Java 8 version of the
+MinimalWordCount example, as well as a series of examples in a simple 'mobile
+gaming' domain. This series introduces some advanced concepts. Finally, the
+following are user contributed examples:
+
+1. [`CryptoRealTime`](https://github.com/GoogleCloudPlatform/professional-services/tree/master/examples/cryptorealtime) Create an unbounded streaming source/reader and manage basic watermarking, checkpointing and record id for data ingestion, stream trading data from exchanges with BEAM + [Medium post](https://medium.com/@igalic/bigtable-beam-dataflow-cryptocurrencies-gcp-terraform-java-maven-4e7873811e86)

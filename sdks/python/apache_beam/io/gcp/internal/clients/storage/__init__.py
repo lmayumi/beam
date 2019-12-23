@@ -18,6 +18,8 @@
 """Common imports for generated storage client library."""
 # pylint:disable=wildcard-import
 
+from __future__ import absolute_import
+
 import pkgutil
 
 # Protect against environments where apitools library is not available.
@@ -30,4 +32,4 @@ except ImportError:
   pass
 # pylint: enable=wrong-import-order, wrong-import-position
 
-__path__ = pkgutil.extend_path(__path__, __name__)
+__path__ = pkgutil.extend_path(__path__, __name__)  # type: ignore

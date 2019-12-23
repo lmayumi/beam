@@ -35,15 +35,17 @@ import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /** Tests for {@link TikaIO}. */
+@RunWith(JUnit4.class)
 public class TikaIOTest implements Serializable {
   private static final String PDF_ZIP_FILE =
       "\n\n\n\n\n\n\n\napache-beam-tika.pdf\n\n\nCombining\n\n\nApache Beam\n\n\n"
@@ -55,8 +57,7 @@ public class TikaIOTest implements Serializable {
           + "Combining\nApache Beam\nand\nApache Tika\ncan help to ingest\nthe content from the"
           + " files\nin most known formats.\n";
 
-  @Rule
-  public transient TestPipeline p = TestPipeline.create();
+  @Rule public transient TestPipeline p = TestPipeline.create();
 
   @Test
   public void testParseAndParseFiles() throws IOException {
@@ -112,14 +113,11 @@ public class TikaIOTest implements Serializable {
 
     PAssert.thatSingleton(res)
         .satisfies(
-            new SerializableFunction<ParseResult, Void>() {
-              @Override
-              public Void apply(ParseResult input) {
-                assertEquals(path, input.getFileLocation());
-                assertFalse(input.isSuccess());
-                assertTrue(input.getError() instanceof TikaException);
-                return null;
-              }
+            input -> {
+              assertEquals(path, input.getFileLocation());
+              assertFalse(input.isSuccess());
+              assertTrue(input.getError() instanceof TikaException);
+              return null;
             });
     p.run();
   }

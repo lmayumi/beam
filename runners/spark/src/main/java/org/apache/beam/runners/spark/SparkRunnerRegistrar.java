@@ -15,46 +15,44 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.spark;
 
 import com.google.auto.service.AutoService;
-import com.google.common.collect.ImmutableList;
+import org.apache.beam.runners.spark.structuredstreaming.SparkStructuredStreamingPipelineOptions;
+import org.apache.beam.runners.spark.structuredstreaming.SparkStructuredStreamingRunner;
 import org.apache.beam.sdk.PipelineRunner;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsRegistrar;
 import org.apache.beam.sdk.runners.PipelineRunnerRegistrar;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 
 /**
- * Contains the {@link PipelineRunnerRegistrar} and {@link PipelineOptionsRegistrar} for the
- * {@link SparkRunner}.
+ * Contains the {@link PipelineRunnerRegistrar} and {@link PipelineOptionsRegistrar} for the {@link
+ * SparkRunner}.
  *
- * {@link AutoService} will register Spark's implementations of the {@link PipelineRunner}
- * and {@link PipelineOptions} as available pipeline runner services.
+ * <p>{@link AutoService} will register Spark's implementations of the {@link PipelineRunner} and
+ * {@link PipelineOptions} as available pipeline runner services.
  */
 public final class SparkRunnerRegistrar {
   private SparkRunnerRegistrar() {}
 
-  /**
-   * Registers the {@link SparkRunner}.
-   */
+  /** Registers the {@link SparkRunner}. */
   @AutoService(PipelineRunnerRegistrar.class)
   public static class Runner implements PipelineRunnerRegistrar {
     @Override
     public Iterable<Class<? extends PipelineRunner<?>>> getPipelineRunners() {
-      return ImmutableList
-          .<Class<? extends PipelineRunner<?>>>of(SparkRunner.class, TestSparkRunner.class);
+      return ImmutableList.of(
+          SparkRunner.class, TestSparkRunner.class, SparkStructuredStreamingRunner.class);
     }
   }
 
-  /**
-   * Registers the {@link SparkPipelineOptions}.
-   */
+  /** Registers the {@link SparkPipelineOptions}. */
   @AutoService(PipelineOptionsRegistrar.class)
   public static class Options implements PipelineOptionsRegistrar {
     @Override
     public Iterable<Class<? extends PipelineOptions>> getPipelineOptions() {
-      return ImmutableList.<Class<? extends PipelineOptions>>of(SparkPipelineOptions.class);
+      return ImmutableList.of(
+          SparkPipelineOptions.class, SparkStructuredStreamingPipelineOptions.class);
     }
   }
 }

@@ -17,10 +17,9 @@
  */
 package org.apache.beam.sdk.extensions.protobuf;
 
-import static com.google.common.base.Preconditions.checkArgument;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkArgument;
 
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Sets;
+import com.google.protobuf.DynamicMessage;
 import com.google.protobuf.ExtensionRegistry;
 import com.google.protobuf.Message;
 import com.google.protobuf.Parser;
@@ -34,8 +33,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.SortedSet;
-import java.util.TreeSet;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.CoderException;
@@ -45,36 +42,39 @@ import org.apache.beam.sdk.coders.CustomCoder;
 import org.apache.beam.sdk.coders.DefaultCoder;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TypeDescriptor;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableSet;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Sets;
 
 /**
  * A {@link Coder} using Google Protocol Buffers binary format. {@link ProtoCoder} supports both
  * Protocol Buffers syntax versions 2 and 3.
  *
- * <p>To learn more about Protocol Buffers, visit:
- * <a href="https://developers.google.com/protocol-buffers">https://developers.google.com/protocol-buffers</a>
+ * <p>To learn more about Protocol Buffers, visit: <a
+ * href="https://developers.google.com/protocol-buffers">https://developers.google.com/protocol-buffers</a>
  *
- * <p>{@link ProtoCoder} is registered in the global {@link CoderRegistry} as the default
- * {@link Coder} for any {@link Message} object. Custom message extensions are also supported, but
- * these extensions must be registered for a particular {@link ProtoCoder} instance and that
- * instance must be registered on the {@link PCollection} that needs the extensions:
+ * <p>{@link ProtoCoder} is registered in the global {@link CoderRegistry} as the default {@link
+ * Coder} for any {@link Message} object. Custom message extensions are also supported, but these
+ * extensions must be registered for a particular {@link ProtoCoder} instance and that instance must
+ * be registered on the {@link PCollection} that needs the extensions:
  *
  * <pre>{@code
  * import MyProtoFile;
  * import MyProtoFile.MyMessage;
  *
  * Coder<MyMessage> coder = ProtoCoder.of(MyMessage.class).withExtensionsFrom(MyProtoFile.class);
- * PCollection<MyMessage> records =  input.apply(...).setCoder(coder);
+ * PCollection<MyMessage> records = input.apply(...).setCoder(coder);
  * }</pre>
  *
  * <h3>Versioning</h3>
  *
- * <p>{@link ProtoCoder} supports both versions 2 and 3 of the Protocol Buffers syntax. However,
- * the Java runtime version of the <code>google.com.protobuf</code> library must match exactly the
+ * <p>{@link ProtoCoder} supports both versions 2 and 3 of the Protocol Buffers syntax. However, the
+ * Java runtime version of the <code>google.com.protobuf</code> library must match exactly the
  * version of <code>protoc</code> that was used to produce the JAR files containing the compiled
  * <code>.proto</code> messages.
  *
- * <p>For more information, see the
- * <a href="https://developers.google.com/protocol-buffers/docs/proto3#using-proto2-message-types">Protocol Buffers documentation</a>.
+ * <p>For more information, see the <a
+ * href="https://developers.google.com/protocol-buffers/docs/proto3#using-proto2-message-types">Protocol
+ * Buffers documentation</a>.
  *
  * <h3>{@link ProtoCoder} and Determinism</h3>
  *
@@ -82,37 +82,35 @@ import org.apache.beam.sdk.values.TypeDescriptor;
  * pipeline as long as:
  *
  * <ul>
- * <li>The encoded messages (and any transitively linked messages) do not use <code>map</code>
- *     fields.</li>
- * <li>Every Java VM that encodes or decodes the messages use the same runtime version of the
- *     Protocol Buffers library and the same compiled <code>.proto</code> file JAR.</li>
+ *   <li>The encoded messages (and any transitively linked messages) do not use <code>map</code>
+ *       fields.
+ *   <li>Every Java VM that encodes or decodes the messages use the same runtime version of the
+ *       Protocol Buffers library and the same compiled <code>.proto</code> file JAR.
  * </ul>
  *
  * <h3>{@link ProtoCoder} and Encoding Stability</h3>
  *
  * <p>When changing Protocol Buffers messages, follow the rules in the Protocol Buffers language
- * guides for
- * <a href="https://developers.google.com/protocol-buffers/docs/proto#updating">{@code proto2}</a>
- * and
- * <a href="https://developers.google.com/protocol-buffers/docs/proto3#updating">{@code proto3}</a>
- * syntaxes, depending on your message type. Following these guidelines will ensure that the
- * old encoded data can be read by new versions of the code.
+ * guides for <a href="https://developers.google.com/protocol-buffers/docs/proto#updating">{@code
+ * proto2}</a> and <a
+ * href="https://developers.google.com/protocol-buffers/docs/proto3#updating">{@code proto3}</a>
+ * syntaxes, depending on your message type. Following these guidelines will ensure that the old
+ * encoded data can be read by new versions of the code.
  *
- * <p>Generally, any change to the message type, registered extensions, runtime library, or
- * compiled proto JARs may change the encoding. Thus even if both the original and updated messages
- * can be encoded deterministically within a single job, these deterministic encodings may not be
- * the same across jobs.
+ * <p>Generally, any change to the message type, registered extensions, runtime library, or compiled
+ * proto JARs may change the encoding. Thus even if both the original and updated messages can be
+ * encoded deterministically within a single job, these deterministic encodings may not be the same
+ * across jobs.
  *
  * @param <T> the Protocol Buffers {@link Message} handled by this {@link Coder}.
  */
 public class ProtoCoder<T extends Message> extends CustomCoder<T> {
 
+  public static final long serialVersionUID = -5043999806040629525L;
 
-  /**
-   * Returns a {@link ProtoCoder} for the given Protocol Buffers {@link Message}.
-   */
+  /** Returns a {@link ProtoCoder} for the given Protocol Buffers {@link Message}. */
   public static <T extends Message> ProtoCoder<T> of(Class<T> protoMessageClass) {
-    return new ProtoCoder<>(protoMessageClass, ImmutableSet.<Class<?>>of());
+    return new ProtoCoder<>(protoMessageClass, ImmutableSet.of());
   }
 
   /**
@@ -126,15 +124,11 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
   }
 
   /**
-   * Returns a {@link ProtoCoder} like this one, but with the extensions from the given classes
-   * registered.
+   * Validate that all extensionHosts are able to be registered.
    *
-   * <p>Each of the extension host classes must be an class automatically generated by the
-   * Protocol Buffers compiler, {@code protoc}, that contains messages.
-   *
-   * <p>Does not modify this object.
+   * @param moreExtensionHosts
    */
-  public ProtoCoder<T> withExtensionsFrom(Iterable<Class<?>> moreExtensionHosts) {
+  void validateExtensions(Iterable<Class<?>> moreExtensionHosts) {
     for (Class<?> extensionHost : moreExtensionHosts) {
       // Attempt to access the required method, to make sure it's present.
       try {
@@ -149,7 +143,19 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
             e);
       }
     }
+  }
 
+  /**
+   * Returns a {@link ProtoCoder} like this one, but with the extensions from the given classes
+   * registered.
+   *
+   * <p>Each of the extension host classes must be an class automatically generated by the Protocol
+   * Buffers compiler, {@code protoc}, that contains messages.
+   *
+   * <p>Does not modify this object.
+   */
+  public ProtoCoder<T> withExtensionsFrom(Iterable<Class<?>> moreExtensionHosts) {
+    validateExtensions(moreExtensionHosts);
     return new ProtoCoder<>(
         protoMessageClass,
         new ImmutableSet.Builder<Class<?>>()
@@ -168,8 +174,7 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
   }
 
   @Override
-  public void encode(T value, OutputStream outStream)
-      throws IOException {
+  public void encode(T value, OutputStream outStream) throws IOException {
     encode(value, outStream, Context.NESTED);
   }
 
@@ -204,7 +209,7 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
     if (this == other) {
       return true;
     }
-    if (!(other instanceof ProtoCoder)) {
+    if (other == null || getClass() != other.getClass()) {
       return false;
     }
     ProtoCoder<?> otherCoder = (ProtoCoder<?>) other;
@@ -223,9 +228,7 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
     ProtobufUtil.verifyDeterministic(this);
   }
 
-  /**
-   * Returns the Protocol Buffers {@link Message} type this {@link ProtoCoder} supports.
-   */
+  /** Returns the Protocol Buffers {@link Message} type this {@link ProtoCoder} supports. */
   public Class<T> getMessageType() {
     return protoMessageClass;
   }
@@ -235,8 +238,8 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
   }
 
   /**
-   * Returns the {@link ExtensionRegistry} listing all known Protocol Buffers extension messages
-   * to {@code T} registered with this {@link ProtoCoder}.
+   * Returns the {@link ExtensionRegistry} listing all known Protocol Buffers extension messages to
+   * {@code T} registered with this {@link ProtoCoder}.
    */
   public ExtensionRegistry getExtensionRegistry() {
     if (memoizedExtensionRegistry == null) {
@@ -259,13 +262,13 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
   // Private implementation details below.
 
   /** The {@link Message} type to be coded. */
-  private final Class<T> protoMessageClass;
+  final Class<T> protoMessageClass;
 
   /**
    * All extension host classes included in this {@link ProtoCoder}. The extensions from these
    * classes will be included in the {@link ExtensionRegistry} used during encoding and decoding.
    */
-  private final Set<Class<?>> extensionHostClasses;
+  final Set<Class<?>> extensionHostClasses;
 
   // Constants used to serialize and deserialize
   private static final String PROTO_MESSAGE_CLASS = "proto_message_class";
@@ -273,23 +276,29 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
 
   // Transient fields that are lazy initialized and then memoized.
   private transient ExtensionRegistry memoizedExtensionRegistry;
-  private transient Parser<T> memoizedParser;
+  transient Parser<T> memoizedParser;
 
   /** Private constructor. */
-  private ProtoCoder(Class<T> protoMessageClass, Set<Class<?>> extensionHostClasses) {
+  protected ProtoCoder(Class<T> protoMessageClass, Set<Class<?>> extensionHostClasses) {
     this.protoMessageClass = protoMessageClass;
     this.extensionHostClasses = extensionHostClasses;
   }
 
   /** Get the memoized {@link Parser}, possibly initializing it lazily. */
-  private Parser<T> getParser() {
+  protected Parser<T> getParser() {
     if (memoizedParser == null) {
       try {
-        @SuppressWarnings("unchecked")
-        T protoMessageInstance = (T) protoMessageClass.getMethod("getDefaultInstance").invoke(null);
-        @SuppressWarnings("unchecked")
-        Parser<T> tParser = (Parser<T>) protoMessageInstance.getParserForType();
-        memoizedParser = tParser;
+        if (DynamicMessage.class.equals(protoMessageClass)) {
+          throw new IllegalArgumentException(
+              "DynamicMessage is not supported by the ProtoCoder, use the DynamicProtoCoder.");
+        } else {
+          @SuppressWarnings("unchecked")
+          T protoMessageInstance =
+              (T) protoMessageClass.getMethod("getDefaultInstance").invoke(null);
+          @SuppressWarnings("unchecked")
+          Parser<T> tParser = (Parser<T>) protoMessageInstance.getParserForType();
+          memoizedParser = tParser;
+        }
       } catch (IllegalAccessException | InvocationTargetException | NoSuchMethodException e) {
         throw new IllegalArgumentException(e);
       }
@@ -298,8 +307,8 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
   }
 
   /**
-   * Returns a {@link CoderProvider} which uses the {@link ProtoCoder} for
-   * {@link Message proto messages}.
+   * Returns a {@link CoderProvider} which uses the {@link ProtoCoder} for {@link Message proto
+   * messages}.
    *
    * <p>This method is invoked reflectively from {@link DefaultCoder}.
    */
@@ -309,21 +318,18 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
 
   static final TypeDescriptor<Message> MESSAGE_TYPE = new TypeDescriptor<Message>() {};
 
-  /**
-   * A {@link CoderProvider} for {@link Message proto messages}.
-   */
+  /** A {@link CoderProvider} for {@link Message proto messages}. */
   private static class ProtoCoderProvider extends CoderProvider {
 
     @Override
-    public <T> Coder<T> coderFor(TypeDescriptor<T> typeDescriptor,
-        List<? extends Coder<?>> componentCoders) throws CannotProvideCoderException {
+    public <T> Coder<T> coderFor(
+        TypeDescriptor<T> typeDescriptor, List<? extends Coder<?>> componentCoders)
+        throws CannotProvideCoderException {
       if (!typeDescriptor.isSubtypeOf(MESSAGE_TYPE)) {
         throw new CannotProvideCoderException(
             String.format(
                 "Cannot provide %s because %s is not a subclass of %s",
-                ProtoCoder.class.getSimpleName(),
-                typeDescriptor,
-                Message.class.getName()));
+                ProtoCoder.class.getSimpleName(), typeDescriptor, Message.class.getName()));
       }
 
       @SuppressWarnings("unchecked")
@@ -337,13 +343,5 @@ public class ProtoCoder<T extends Message> extends CustomCoder<T> {
         throw new CannotProvideCoderException(e);
       }
     }
-  }
-
-  private SortedSet<String> getSortedExtensionClasses() {
-    SortedSet<String> ret = new TreeSet<>();
-    for (Class<?> clazz : extensionHostClasses) {
-      ret.add(clazz.getName());
-    }
-    return ret;
   }
 }

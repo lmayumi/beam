@@ -21,9 +21,11 @@ import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Set;
 import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.annotations.Experimental.Kind;
 import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Sets;
 
 /** Describes the run-time requirements of a {@link Contextful}, such as access to side inputs. */
 @Experimental(Kind.CONTEXTFUL)
@@ -51,11 +53,19 @@ public final class Requirements implements Serializable {
 
   /** Describes an empty set of requirements. */
   public static Requirements empty() {
-    return new Requirements(Collections.<PCollectionView<?>>emptyList());
+    return new Requirements(Collections.emptyList());
   }
 
   /** Whether this is an empty set of requirements. */
   public boolean isEmpty() {
     return sideInputs.isEmpty();
+  }
+
+  public static Requirements union(Contextful... contextfuls) {
+    Set<PCollectionView<?>> sideInputs = Sets.newHashSet();
+    for (Contextful c : contextfuls) {
+      sideInputs.addAll(c.getRequirements().getSideInputs());
+    }
+    return requiresSideInputs(sideInputs);
   }
 }

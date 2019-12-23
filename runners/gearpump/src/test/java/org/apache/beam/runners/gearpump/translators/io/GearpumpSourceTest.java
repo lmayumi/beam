@@ -15,15 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.gearpump.translators.io;
 
-import com.google.common.collect.Lists;
-
+import io.gearpump.DefaultMessage;
+import io.gearpump.Message;
+import io.gearpump.streaming.source.Watermark;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
-
 import org.apache.beam.runners.gearpump.GearpumpPipelineOptions;
 import org.apache.beam.runners.gearpump.translators.utils.TranslatorUtils;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
@@ -33,9 +32,7 @@ import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.TimestampedValue;
-import org.apache.gearpump.DefaultMessage;
-import org.apache.gearpump.Message;
-import org.apache.gearpump.streaming.source.Watermark;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Lists;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -46,8 +43,7 @@ public class GearpumpSourceTest {
           TimestampedValue.of("a", BoundedWindow.TIMESTAMP_MIN_VALUE),
           TimestampedValue.of("b", new org.joda.time.Instant(0)),
           TimestampedValue.of("c", new org.joda.time.Instant(53)),
-          TimestampedValue.of("d", BoundedWindow.TIMESTAMP_MAX_VALUE)
-      );
+          TimestampedValue.of("d", BoundedWindow.TIMESTAMP_MAX_VALUE));
 
   private static class SourceForTest<T> extends GearpumpSource<T> {
     private ValuesSource<T> valuesSource;

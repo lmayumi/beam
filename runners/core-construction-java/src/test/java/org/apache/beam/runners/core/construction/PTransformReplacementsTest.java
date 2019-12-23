@@ -15,13 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.core.construction;
 
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.Assert.assertThat;
 
-import com.google.common.collect.ImmutableMap;
 import java.util.Collections;
 import org.apache.beam.sdk.io.GenerateSequence;
 import org.apache.beam.sdk.runners.AppliedPTransform;
@@ -34,22 +32,21 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.PValue;
 import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@link PTransformReplacements}.
- */
+/** Tests for {@link PTransformReplacements}. */
 @RunWith(JUnit4.class)
 public class PTransformReplacementsTest {
   @Rule public TestPipeline pipeline = TestPipeline.create().enableAbandonedNodeEnforcement(false);
   @Rule public ExpectedException thrown = ExpectedException.none();
   private PCollection<Long> mainInput = pipeline.apply(GenerateSequence.from(0));
   private PCollectionView<String> sideInput =
-      pipeline.apply(Create.of("foo")).apply(View.<String>asSingleton());
+      pipeline.apply(Create.of("foo")).apply(View.asSingleton());
 
   private PCollection<Long> output = mainInput.apply(ParDo.of(new TestDoFn()));
 
@@ -58,8 +55,8 @@ public class PTransformReplacementsTest {
     AppliedPTransform<PCollection<Long>, ?, ?> application =
         AppliedPTransform.of(
             "application",
-            Collections.<TupleTag<?>, PValue>singletonMap(new TupleTag<Long>(), mainInput),
-            Collections.<TupleTag<?>, PValue>singletonMap(new TupleTag<Long>(), output),
+            Collections.singletonMap(new TupleTag<Long>(), mainInput),
+            Collections.singletonMap(new TupleTag<Long>(), output),
             ParDo.of(new TestDoFn()),
             pipeline);
     PCollection<Long> input = PTransformReplacements.getSingletonMainInput(application);
@@ -75,7 +72,7 @@ public class PTransformReplacementsTest {
                 .put(new TupleTag<Long>(), mainInput)
                 .put(sideInput.getTagInternal(), sideInput.getPCollection())
                 .build(),
-            Collections.<TupleTag<?>, PValue>singletonMap(new TupleTag<Long>(), output),
+            Collections.singletonMap(new TupleTag<Long>(), output),
             ParDo.of(new TestDoFn()).withSideInputs(sideInput),
             pipeline);
     PCollection<Long> input = PTransformReplacements.getSingletonMainInput(application);
@@ -96,7 +93,7 @@ public class PTransformReplacementsTest {
         AppliedPTransform.of(
             "application",
             inputs,
-            Collections.<TupleTag<?>, PValue>singletonMap(new TupleTag<Long>(), output),
+            Collections.singletonMap(new TupleTag<Long>(), output),
             ParDo.of(new TestDoFn()).withSideInputs(sideInput),
             pipeline);
     thrown.expect(IllegalArgumentException.class);
@@ -117,7 +114,7 @@ public class PTransformReplacementsTest {
         AppliedPTransform.of(
             "application",
             inputs,
-            Collections.<TupleTag<?>, PValue>singletonMap(new TupleTag<Long>(), output),
+            Collections.singletonMap(new TupleTag<Long>(), output),
             ParDo.of(new TestDoFn()).withSideInputs(sideInput),
             pipeline);
     thrown.expect(IllegalArgumentException.class);
@@ -126,6 +123,7 @@ public class PTransformReplacementsTest {
   }
 
   private static class TestDoFn extends DoFn<Long, Long> {
-    @ProcessElement public void process(ProcessContext context) {}
+    @ProcessElement
+    public void process(ProcessContext context) {}
   }
 }

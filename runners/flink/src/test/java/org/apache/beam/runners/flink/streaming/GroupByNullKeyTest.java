@@ -17,10 +17,10 @@
  */
 package org.apache.beam.runners.flink.streaming;
 
-import com.google.common.base.Joiner;
 import java.io.File;
 import java.io.Serializable;
 import java.util.Arrays;
+import org.apache.beam.runners.flink.FlinkPipelineOptions;
 import org.apache.beam.runners.flink.FlinkTestPipeline;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
@@ -33,27 +33,27 @@ import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.flink.streaming.util.StreamingProgramTestBase;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Joiner;
+import org.apache.flink.test.util.AbstractTestBase;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
 
-/**
- * Test for GroupByNullKey.
- */
-public class GroupByNullKeyTest extends StreamingProgramTestBase implements Serializable {
+/** Test for GroupByNullKey. */
+public class GroupByNullKeyTest extends AbstractTestBase implements Serializable {
 
   protected String resultDir;
   protected String resultPath;
 
-  static final String[] EXPECTED_RESULT = new String[] {
-      "k: null v: user1 user1 user1 user2 user2 user2 user2 user3"
-  };
+  static final String[] EXPECTED_RESULT =
+      new String[] {"k: null v: user1 user1 user1 user2 user2 user2 user2 user3"};
 
-  public GroupByNullKeyTest(){
-  }
+  public GroupByNullKeyTest() {}
 
-  @Override
-  protected void preSubmit() throws Exception {
+  @Before
+  public void preSubmit() throws Exception {
     // Beam Write will add shard suffix to fileName, see ShardNameTemplate.
     // So tempFile need have a parent to compare.
     File resultParent = createAndRegisterTempFile("result");
@@ -61,14 +61,12 @@ public class GroupByNullKeyTest extends StreamingProgramTestBase implements Seri
     resultPath = new File(resultParent, "file.txt").getAbsolutePath();
   }
 
-  @Override
-  protected void postSubmit() throws Exception {
+  @After
+  public void postSubmit() throws Exception {
     compareResultsByLinesInMemory(Joiner.on('\n').join(EXPECTED_RESULT), resultDir);
   }
 
-  /**
-   * DoFn extracting user and timestamp.
-   */
+  /** DoFn extracting user and timestamp. */
   private static class ExtractUserAndTimestamp extends DoFn<KV<Integer, String>, String> {
     @ProcessElement
     public void processElement(ProcessContext c) {
@@ -82,47 +80,56 @@ public class GroupByNullKeyTest extends StreamingProgramTestBase implements Seri
     }
   }
 
-  @Override
-  protected void testProgram() throws Exception {
+  // suppress since toString() of Void is called and key is deliberately null
+  @SuppressWarnings("ObjectToString")
+  @Test
+  public void testProgram() throws Exception {
 
     Pipeline p = FlinkTestPipeline.createForStreaming();
+    p.getOptions().as(FlinkPipelineOptions.class).setParallelism(1);
 
     PCollection<String> output =
-      p.apply(Create.of(Arrays.asList(
-          KV.<Integer, String>of(0, "user1"),
-          KV.<Integer, String>of(1, "user1"),
-          KV.<Integer, String>of(2, "user1"),
-          KV.<Integer, String>of(10, "user2"),
-          KV.<Integer, String>of(1, "user2"),
-          KV.<Integer, String>of(15000, "user2"),
-          KV.<Integer, String>of(12000, "user2"),
-          KV.<Integer, String>of(25000, "user3"))))
-          .apply(ParDo.of(new ExtractUserAndTimestamp()))
-          .apply(Window.<String>into(FixedWindows.of(Duration.standardHours(1)))
-              .triggering(AfterWatermark.pastEndOfWindow())
-              .withAllowedLateness(Duration.ZERO)
-              .discardingFiredPanes())
-
-          .apply(ParDo.of(new DoFn<String, KV<Void, String>>() {
-            @ProcessElement
-            public void processElement(ProcessContext c) throws Exception {
-              String elem = c.element();
-              c.output(KV.<Void, String>of(null, elem));
-            }
-          }))
-          .apply(GroupByKey.<Void, String>create())
-          .apply(ParDo.of(new DoFn<KV<Void, Iterable<String>>, String>() {
-            @ProcessElement
-            public void processElement(ProcessContext c) throws Exception {
-              KV<Void, Iterable<String>> elem = c.element();
-              StringBuilder str = new StringBuilder();
-              str.append("k: " + elem.getKey() + " v:");
-              for (String v : elem.getValue()) {
-                str.append(" " + v);
-              }
-              c.output(str.toString());
-            }
-          }));
+        p.apply(
+                Create.of(
+                    Arrays.asList(
+                        KV.of(0, "user1"),
+                        KV.of(1, "user1"),
+                        KV.of(2, "user1"),
+                        KV.of(10, "user2"),
+                        KV.of(1, "user2"),
+                        KV.of(15000, "user2"),
+                        KV.of(12000, "user2"),
+                        KV.of(25000, "user3"))))
+            .apply(ParDo.of(new ExtractUserAndTimestamp()))
+            .apply(
+                Window.<String>into(FixedWindows.of(Duration.standardHours(1)))
+                    .triggering(AfterWatermark.pastEndOfWindow())
+                    .withAllowedLateness(Duration.ZERO)
+                    .discardingFiredPanes())
+            .apply(
+                ParDo.of(
+                    new DoFn<String, KV<Void, String>>() {
+                      @ProcessElement
+                      public void processElement(ProcessContext c) throws Exception {
+                        String elem = c.element();
+                        c.output(KV.of(null, elem));
+                      }
+                    }))
+            .apply(GroupByKey.create())
+            .apply(
+                ParDo.of(
+                    new DoFn<KV<Void, Iterable<String>>, String>() {
+                      @ProcessElement
+                      public void processElement(ProcessContext c) throws Exception {
+                        KV<Void, Iterable<String>> elem = c.element();
+                        StringBuilder str = new StringBuilder();
+                        str.append("k: " + elem.getKey() + " v:");
+                        for (String v : elem.getValue()) {
+                          str.append(" " + v);
+                        }
+                        c.output(str.toString());
+                      }
+                    }));
     output.apply(TextIO.write().to(resultPath));
     p.run();
   }

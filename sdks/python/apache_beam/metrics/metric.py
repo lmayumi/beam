@@ -24,11 +24,16 @@ and displayed as part of their pipeline execution.
 - Metrics - This class lets pipeline and transform writers create and access
     metric objects such as counters, distributions, etc.
 """
-import inspect
+from __future__ import absolute_import
 
-from apache_beam.metrics.execution import MetricsEnvironment
+import inspect
+from builtins import object
+
+from apache_beam.metrics import cells
+from apache_beam.metrics.execution import MetricUpdater
 from apache_beam.metrics.metricbase import Counter
 from apache_beam.metrics.metricbase import Distribution
+from apache_beam.metrics.metricbase import Gauge
 from apache_beam.metrics.metricbase import MetricName
 
 __all__ = ['Metrics', 'MetricsFilter']
@@ -75,26 +80,51 @@ class Metrics(object):
     namespace = Metrics.get_namespace(namespace)
     return Metrics.DelegatingDistribution(MetricName(namespace, name))
 
-  class DelegatingCounter(Counter):
-    def __init__(self, metric_name):
-      self.metric_name = metric_name
+  @staticmethod
+  def gauge(namespace, name):
+    """Obtains or creates a Gauge metric.
 
-    def inc(self, n=1):
-      container = MetricsEnvironment.current_container()
-      if container is not None:
-        container.get_counter(self.metric_name).inc(n)
+    Gauge metrics are restricted to integer-only values.
+
+    Args:
+      namespace: A class or string that gives the namespace to a metric
+      name: A string that gives a unique name to a metric
+
+    Returns:
+      A Distribution object.
+    """
+    namespace = Metrics.get_namespace(namespace)
+    return Metrics.DelegatingGauge(MetricName(namespace, name))
+
+  class DelegatingCounter(Counter):
+    """Metrics Counter that Delegates functionality to MetricsEnvironment."""
+
+    def __init__(self, metric_name):
+      super(Metrics.DelegatingCounter, self).__init__()
+      self.metric_name = metric_name
+      self.inc = MetricUpdater(cells.CounterCell, metric_name, default=1)
 
   class DelegatingDistribution(Distribution):
-    def __init__(self, metric_name):
-      self.metric_name = metric_name
+    """Metrics Distribution Delegates functionality to MetricsEnvironment."""
 
-    def update(self, value):
-      container = MetricsEnvironment.current_container()
-      if container is not None:
-        container.get_distribution(self.metric_name).update(value)
+    def __init__(self, metric_name):
+      super(Metrics.DelegatingDistribution, self).__init__()
+      self.metric_name = metric_name
+      self.update = MetricUpdater(cells.DistributionCell, metric_name)
+
+  class DelegatingGauge(Gauge):
+    """Metrics Gauge that Delegates functionality to MetricsEnvironment."""
+
+    def __init__(self, metric_name):
+      super(Metrics.DelegatingGauge, self).__init__()
+      self.metric_name = metric_name
+      self.set = MetricUpdater(cells.GaugeCell, metric_name)
 
 
 class MetricResults(object):
+  COUNTERS = "counters"
+  DISTRIBUTIONS = "distributions"
+  GAUGES = "gauges"
 
   @staticmethod
   def _matches_name(filter, metric_key):
@@ -109,17 +139,25 @@ class MetricResults(object):
     return False
 
   @staticmethod
-  def _matches_sub_path(actual_scope, filter_scope):
-    start_pos = actual_scope.find(filter_scope)
-    end_pos = start_pos + len(filter_scope)
+  def _is_sub_list(needle, haystack):
+    """True iff `needle` is a sub-list of `haystack` (i.e. a contiguous slice
+    of `haystack` exactly matches `needle`"""
+    needle_len = len(needle)
+    haystack_len = len(haystack)
+    for i in range(0, haystack_len - needle_len + 1):
+      if haystack[i:i+needle_len] == needle:
+        return True
 
-    if start_pos == -1:
-      return False  # No match at all
-    elif start_pos != 0 and actual_scope[start_pos - 1] != '/':
-      return False  # The first entry was not exactly matched
-    elif end_pos != len(actual_scope) and actual_scope[end_pos] != '/':
-      return False  # The last entry was not exactly matched
-    return True
+    return False
+
+  @staticmethod
+  def _matches_sub_path(actual_scope, filter_scope):
+    """True iff the '/'-delimited pieces of filter_scope exist as a sub-list
+    of the '/'-delimited pieces of actual_scope"""
+    return MetricResults._is_sub_list(
+        filter_scope.split('/'),
+        actual_scope.split('/')
+    )
 
   @staticmethod
   def _matches_scope(filter, metric_key):
@@ -143,6 +181,20 @@ class MetricResults(object):
     return False
 
   def query(self, filter=None):
+    """Queries the runner for existing user metrics that match the filter.
+
+    It should return a dictionary, with lists of each kind of metric, and
+    each list contains the corresponding kind of MetricResult. Like so:
+
+        {
+          "counters": [MetricResult(counter_key, committed, attempted), ...],
+          "distributions": [MetricResult(dist_key, committed, attempted), ...],
+          "gauges": []  // Empty list if nothing matched the filter.
+        }
+
+    The committed / attempted values are DistributionResult / GaugeResult / int
+    objects.
+    """
     raise NotImplementedError
 
 

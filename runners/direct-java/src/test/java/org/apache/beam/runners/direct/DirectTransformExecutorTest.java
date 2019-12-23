@@ -25,14 +25,12 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.junit.Assert.assertThat;
 import static org.mockito.Mockito.when;
 
-import com.google.common.base.Optional;
-import com.google.common.collect.Iterables;
-import com.google.common.util.concurrent.MoreExecutors;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -45,6 +43,8 @@ import org.apache.beam.sdk.transforms.WithKeys;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.util.concurrent.MoreExecutors;
 import org.hamcrest.Matchers;
 import org.joda.time.Instant;
 import org.junit.Before;
@@ -74,8 +74,7 @@ public class DirectTransformExecutorTest {
   @Mock private EvaluationContext evaluationContext;
   @Mock private TransformEvaluatorRegistry registry;
 
-  @Rule
-  public TestPipeline p = TestPipeline.create().enableAbandonedNodeEnforcement(false);
+  @Rule public TestPipeline p = TestPipeline.create().enableAbandonedNodeEnforcement(false);
 
   @Before
   public void setup() {
@@ -90,7 +89,7 @@ public class DirectTransformExecutorTest {
     completionCallback = new RegisteringCompletionCallback(evaluatorCompleted);
 
     created = p.apply(Create.of("foo", "spam", "third"));
-    PCollection<KV<Integer, String>> downstream = created.apply(WithKeys.<Integer, String>of(3));
+    PCollection<KV<Integer, String>> downstream = created.apply(WithKeys.of(3));
 
     DirectGraphs.performDirectOverrides(p);
     DirectGraph graph = DirectGraphs.getGraph(p);
@@ -124,7 +123,7 @@ public class DirectTransformExecutorTest {
         new DirectTransformExecutor<>(
             evaluationContext,
             registry,
-            Collections.<ModelEnforcementFactory>emptyList(),
+            Collections.emptyList(),
             null,
             createdProducer,
             completionCallback,
@@ -132,7 +131,7 @@ public class DirectTransformExecutorTest {
     executor.run();
 
     assertThat(finishCalled.get(), is(true));
-    assertThat(completionCallback.handledResult, Matchers.<TransformResult<?>>equalTo(result));
+    assertThat(completionCallback.handledResult, equalTo(result));
     assertThat(completionCallback.handledException, is(nullValue()));
   }
 
@@ -144,7 +143,7 @@ public class DirectTransformExecutorTest {
         new DirectTransformExecutor<>(
             evaluationContext,
             registry,
-            Collections.<ModelEnforcementFactory>emptyList(),
+            Collections.emptyList(),
             null,
             createdProducer,
             completionCallback,
@@ -166,7 +165,6 @@ public class DirectTransformExecutorTest {
           @Override
           public void processElement(WindowedValue<String> element) throws Exception {
             elementsProcessed.add(element);
-            return;
           }
 
           @Override
@@ -186,22 +184,24 @@ public class DirectTransformExecutorTest {
         new DirectTransformExecutor<>(
             evaluationContext,
             registry,
-            Collections.<ModelEnforcementFactory>emptyList(),
+            Collections.emptyList(),
             inputBundle,
             downstreamProducer,
             completionCallback,
             transformEvaluationState);
 
-    Executors.newSingleThreadExecutor().submit(executor);
+    Future<?> future = Executors.newSingleThreadExecutor().submit(executor);
 
     evaluatorCompleted.await();
+    future.get();
 
     assertThat(elementsProcessed, containsInAnyOrder(spam, third, foo));
-    assertThat(completionCallback.handledResult, Matchers.<TransformResult<?>>equalTo(result));
+    assertThat(completionCallback.handledResult, equalTo(result));
     assertThat(completionCallback.handledException, is(nullValue()));
   }
 
   @Test
+  @SuppressWarnings("FutureReturnValueIgnored") // expected exception checked via completionCallback
   public void processElementThrowsExceptionCallsback() throws Exception {
     final TransformResult<String> result =
         StepTransformResult.<String>withoutHold(downstreamProducer).build();
@@ -228,7 +228,7 @@ public class DirectTransformExecutorTest {
         new DirectTransformExecutor<>(
             evaluationContext,
             registry,
-            Collections.<ModelEnforcementFactory>emptyList(),
+            Collections.emptyList(),
             inputBundle,
             downstreamProducer,
             completionCallback,
@@ -242,6 +242,7 @@ public class DirectTransformExecutorTest {
   }
 
   @Test
+  @SuppressWarnings("FutureReturnValueIgnored") // expected exception checked via completionCallback
   public void finishBundleThrowsExceptionCallsback() throws Exception {
     final Exception exception = new Exception();
     TransformEvaluator<String> evaluator =
@@ -262,7 +263,7 @@ public class DirectTransformExecutorTest {
         new DirectTransformExecutor<>(
             evaluationContext,
             registry,
-            Collections.<ModelEnforcementFactory>emptyList(),
+            Collections.emptyList(),
             inputBundle,
             downstreamProducer,
             completionCallback,
@@ -310,19 +311,14 @@ public class DirectTransformExecutorTest {
 
     executor.run();
     TestEnforcement<?> testEnforcement = enforcement.instance;
-    assertThat(
-        testEnforcement.beforeElements,
-        Matchers.<WindowedValue<?>>containsInAnyOrder(barElem, fooElem));
-    assertThat(
-        testEnforcement.afterElements,
-        Matchers.<WindowedValue<?>>containsInAnyOrder(barElem, fooElem));
-    assertThat(testEnforcement.finishedBundles, Matchers.<TransformResult<?>>contains(result));
+    assertThat(testEnforcement.beforeElements, containsInAnyOrder(barElem, fooElem));
+    assertThat(testEnforcement.afterElements, containsInAnyOrder(barElem, fooElem));
+    assertThat(testEnforcement.finishedBundles, Matchers.contains(result));
   }
 
   @Test
   public void callWithEnforcementThrowsOnFinishPropagates() throws Exception {
-    final TransformResult<Object> result =
-        StepTransformResult.withoutHold(createdProducer).build();
+    final TransformResult<Object> result = StepTransformResult.withoutHold(createdProducer).build();
 
     TransformEvaluator<Object> evaluator =
         new TransformEvaluator<Object>() {
@@ -360,8 +356,7 @@ public class DirectTransformExecutorTest {
 
   @Test
   public void callWithEnforcementThrowsOnElementPropagates() throws Exception {
-    final TransformResult<Object> result =
-        StepTransformResult.withoutHold(createdProducer).build();
+    final TransformResult<Object> result = StepTransformResult.withoutHold(createdProducer).build();
 
     TransformEvaluator<Object> evaluator =
         new TransformEvaluator<Object>() {
@@ -419,16 +414,13 @@ public class DirectTransformExecutorTest {
 
       Optional<? extends CommittedBundle<?>> unprocessedBundle;
       if (inputBundle == null || Iterables.isEmpty(unprocessedElements)) {
-        unprocessedBundle = Optional.absent();
+        unprocessedBundle = Optional.empty();
       } else {
         unprocessedBundle =
             Optional.<CommittedBundle<?>>of(inputBundle.withElements(unprocessedElements));
       }
       return CommittedResult.create(
-          result,
-          unprocessedBundle,
-          Collections.<CommittedBundle<?>>emptyList(),
-          EnumSet.noneOf(OutputType.class));
+          result, unprocessedBundle, Collections.emptyList(), EnumSet.noneOf(OutputType.class));
     }
 
     @Override

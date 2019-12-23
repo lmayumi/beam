@@ -15,16 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.direct;
 
 import com.google.auto.value.AutoValue;
-import com.google.common.base.Optional;
-import com.google.common.collect.Iterables;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,6 +37,7 @@ import org.apache.beam.sdk.runners.AppliedPTransform;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,7 +51,8 @@ class QuiescenceDriver implements ExecutionDriver {
   public static ExecutionDriver create(
       EvaluationContext context,
       DirectGraph graph,
-      BundleProcessor<CommittedBundle<?>, AppliedPTransform<?, ?, ?>> bundleProcessor,
+      BundleProcessor<PCollection<?>, CommittedBundle<?>, AppliedPTransform<?, ?, ?>>
+          bundleProcessor,
       PipelineMessageReceiver messageReceiver,
       Map<AppliedPTransform<?, ?, ?>, ConcurrentLinkedQueue<CommittedBundle<?>>> initialBundles) {
     return new QuiescenceDriver(context, graph, bundleProcessor, messageReceiver, initialBundles);
@@ -60,11 +60,12 @@ class QuiescenceDriver implements ExecutionDriver {
 
   private final EvaluationContext evaluationContext;
   private final DirectGraph graph;
-  private final BundleProcessor<CommittedBundle<?>, AppliedPTransform<?, ?, ?>> bundleProcessor;
+  private final BundleProcessor<PCollection<?>, CommittedBundle<?>, AppliedPTransform<?, ?, ?>>
+      bundleProcessor;
   private final PipelineMessageReceiver pipelineMessageReceiver;
 
   private final CompletionCallback defaultCompletionCallback =
-      new TimerIterableCompletionCallback(Collections.<TimerData>emptyList());
+      new TimerIterableCompletionCallback(Collections.emptyList());
 
   private final Map<AppliedPTransform<?, ?, ?>, ConcurrentLinkedQueue<CommittedBundle<?>>>
       pendingRootBundles;
@@ -78,7 +79,8 @@ class QuiescenceDriver implements ExecutionDriver {
   private QuiescenceDriver(
       EvaluationContext evaluationContext,
       DirectGraph graph,
-      BundleProcessor<CommittedBundle<?>, AppliedPTransform<?, ?, ?>> bundleProcessor,
+      BundleProcessor<PCollection<?>, CommittedBundle<?>, AppliedPTransform<?, ?, ?>>
+          bundleProcessor,
       PipelineMessageReceiver pipelineMessageReceiver,
       Map<AppliedPTransform<?, ?, ?>, ConcurrentLinkedQueue<CommittedBundle<?>>>
           pendingRootBundles) {
@@ -150,7 +152,8 @@ class QuiescenceDriver implements ExecutionDriver {
   /** Fires any available timers. */
   private void fireTimers() {
     try {
-      for (FiredTimers transformTimers : evaluationContext.extractFiredTimers()) {
+      for (FiredTimers<AppliedPTransform<?, ?, ?>> transformTimers :
+          evaluationContext.extractFiredTimers()) {
         Collection<TimerData> delivery = transformTimers.getTimers();
         KeyedWorkItem<?, Object> work =
             KeyedWorkItems.timersWorkItem(transformTimers.getKey().getKey(), delivery);
@@ -161,12 +164,12 @@ class QuiescenceDriver implements ExecutionDriver {
                     transformTimers.getKey(),
                     (PCollection)
                         Iterables.getOnlyElement(
-                            transformTimers.getTransform().getInputs().values()))
+                            transformTimers.getExecutable().getInputs().values()))
                 .add(WindowedValue.valueInGlobalWindow(work))
                 .commit(evaluationContext.now());
         outstandingWork.incrementAndGet();
         bundleProcessor.process(
-            bundle, transformTimers.getTransform(), new TimerIterableCompletionCallback(delivery));
+            bundle, transformTimers.getExecutable(), new TimerIterableCompletionCallback(delivery));
         state.set(ExecutorState.ACTIVE);
       }
     } catch (Exception e) {
@@ -246,6 +249,7 @@ class QuiescenceDriver implements ExecutionDriver {
    * Exception)}.
    */
   private class TimerIterableCompletionCallback implements CompletionCallback {
+
     private final Iterable<TimerData> timers;
 
     TimerIterableCompletionCallback(Iterable<TimerData> timers) {
@@ -255,7 +259,9 @@ class QuiescenceDriver implements ExecutionDriver {
     @Override
     public final CommittedResult handleResult(
         CommittedBundle<?> inputBundle, TransformResult<?> result) {
-      CommittedResult committedResult = evaluationContext.handleResult(inputBundle, timers, result);
+
+      final CommittedResult<AppliedPTransform<?, ?, ?>> committedResult;
+      committedResult = evaluationContext.handleResult(inputBundle, timers, result);
       for (CommittedBundle<?> outputBundle : committedResult.getOutputs()) {
         pendingWork.offer(
             WorkUpdate.fromBundle(
@@ -270,9 +276,7 @@ class QuiescenceDriver implements ExecutionDriver {
         } else {
           pendingWork.offer(
               WorkUpdate.fromBundle(
-                  unprocessedInputs.get(),
-                  Collections.<AppliedPTransform<?, ?, ?>>singleton(
-                      committedResult.getTransform())));
+                  unprocessedInputs.get(), Collections.singleton(committedResult.getExecutable())));
         }
       }
       if (!committedResult.getProducedOutputTypes().isEmpty()) {
@@ -309,14 +313,12 @@ class QuiescenceDriver implements ExecutionDriver {
     private static WorkUpdate fromBundle(
         CommittedBundle<?> bundle, Collection<AppliedPTransform<?, ?, ?>> consumers) {
       return new AutoValue_QuiescenceDriver_WorkUpdate(
-          Optional.of(bundle), consumers, Optional.<Exception>absent());
+          Optional.of(bundle), consumers, Optional.empty());
     }
 
     private static WorkUpdate fromException(Exception e) {
       return new AutoValue_QuiescenceDriver_WorkUpdate(
-          Optional.<CommittedBundle<?>>absent(),
-          Collections.<AppliedPTransform<?, ?, ?>>emptyList(),
-          Optional.of(e));
+          Optional.empty(), Collections.emptyList(), Optional.of(e));
     }
 
     /** Returns the bundle that produced this update. */

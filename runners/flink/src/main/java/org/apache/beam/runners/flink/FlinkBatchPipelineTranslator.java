@@ -18,6 +18,7 @@
 package org.apache.beam.runners.flink;
 
 import javax.annotation.Nullable;
+import org.apache.beam.runners.core.construction.PTransformTranslation;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.runners.TransformHierarchy;
@@ -28,17 +29,12 @@ import org.apache.flink.api.java.io.DiscardingOutputFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * {@link Pipeline.PipelineVisitor} for executing a {@link Pipeline} as a
- * Flink batch job.
- */
+/** {@link Pipeline.PipelineVisitor} for executing a {@link Pipeline} as a Flink batch job. */
 class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
 
   private static final Logger LOG = LoggerFactory.getLogger(FlinkBatchPipelineTranslator.class);
 
-  /**
-   * The necessary context in the case of a batch job.
-   */
+  /** The necessary context in the case of a batch job. */
   private final FlinkBatchTranslationContext batchContext;
 
   private int depth = 0;
@@ -53,7 +49,7 @@ class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
     super.translate(pipeline);
 
     // terminate dangling DataSets
-    for (DataSet<?> dataSet: batchContext.getDanglingDataSets().values()) {
+    for (DataSet<?> dataSet : batchContext.getDanglingDataSets().values()) {
       dataSet.output(new DiscardingOutputFormat());
     }
   }
@@ -94,9 +90,9 @@ class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
     BatchTransformTranslator<?> translator =
         FlinkBatchTransformTranslators.getTranslator(transform);
     if (translator == null) {
-      LOG.info(node.getTransform().getClass().toString());
-      throw new UnsupportedOperationException("The transform " + transform
-          + " is currently not supported.");
+      String transformUrn = PTransformTranslation.urnForTransform(transform);
+      throw new UnsupportedOperationException(
+          "The transform " + transformUrn + " is currently not supported.");
     }
     applyBatchTransform(transform, node, translator);
   }
@@ -117,16 +113,12 @@ class FlinkBatchPipelineTranslator extends FlinkPipelineTranslator {
     typedTranslator.translateNode(typedTransform, batchContext);
   }
 
-  /**
-   * A translator of a {@link PTransform}.
-   */
+  /** A translator of a {@link PTransform}. */
   public interface BatchTransformTranslator<TransformT extends PTransform> {
     void translateNode(TransformT transform, FlinkBatchTranslationContext context);
   }
 
-  /**
-   * Returns a translator for the given node, if it is possible, otherwise null.
-   */
+  /** Returns a translator for the given node, if it is possible, otherwise null. */
   private static BatchTransformTranslator<?> getTranslator(TransformHierarchy.Node node) {
     @Nullable PTransform<?, ?> transform = node.getTransform();
 

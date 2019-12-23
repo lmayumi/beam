@@ -20,21 +20,32 @@
 Triggers control when in processing time windows get emitted.
 """
 
+from __future__ import absolute_import
+
 import collections
 import copy
-import itertools
+import logging
+import numbers
 from abc import ABCMeta
 from abc import abstractmethod
+from builtins import object
 
+from future.moves.itertools import zip_longest
+from future.utils import iteritems
+from future.utils import with_metaclass
+
+from apache_beam.coders import coder_impl
 from apache_beam.coders import observable
 from apache_beam.portability.api import beam_runner_api_pb2
 from apache_beam.transforms import combiners
 from apache_beam.transforms import core
 from apache_beam.transforms.timeutil import TimeDomain
 from apache_beam.transforms.window import GlobalWindow
+from apache_beam.transforms.window import GlobalWindows
 from apache_beam.transforms.window import TimestampCombiner
 from apache_beam.transforms.window import WindowedValue
 from apache_beam.transforms.window import WindowFn
+from apache_beam.utils import windowed_value
 from apache_beam.utils.timestamp import MAX_TIMESTAMP
 from apache_beam.utils.timestamp import MIN_TIMESTAMP
 from apache_beam.utils.timestamp import TIME_GRANULARITY
@@ -46,6 +57,7 @@ __all__ = [
     'TriggerFn',
     'DefaultTrigger',
     'AfterWatermark',
+    'AfterProcessingTime',
     'AfterCount',
     'Repeatedly',
     'AfterAny',
@@ -55,23 +67,21 @@ __all__ = [
     ]
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 class AccumulationMode(object):
-  """Controls what to do with data when a trigger fires multiple times.
-  """
+  """Controls what to do with data when a trigger fires multiple times."""
   DISCARDING = beam_runner_api_pb2.AccumulationMode.DISCARDING
   ACCUMULATING = beam_runner_api_pb2.AccumulationMode.ACCUMULATING
   # TODO(robertwb): Provide retractions of previous outputs.
   # RETRACTING = 3
 
 
-class _StateTag(object):
+class _StateTag(with_metaclass(ABCMeta, object)):  # type: ignore[misc]
   """An identifier used to store and retrieve typed, combinable state.
 
-  The given tag must be unique for this stage.  If CombineFn is None then
-  all elements will be returned as a list, otherwise the given CombineFn
-  will be applied (possibly incrementally and eagerly) when adding elements.
-  """
-  __metaclass__ = ABCMeta
+  The given tag must be unique for this step."""
 
   def __init__(self, tag):
     self.tag = tag
@@ -87,8 +97,21 @@ class _ValueStateTag(_StateTag):
     return _ValueStateTag(prefix + self.tag)
 
 
+class _SetStateTag(_StateTag):
+  """StateTag pointing to an element."""
+
+  def __repr__(self):
+    return 'SetStateTag({tag})'.format(tag=self.tag)
+
+  def with_prefix(self, prefix):
+    return _SetStateTag(prefix + self.tag)
+
+
 class _CombiningValueStateTag(_StateTag):
-  """StateTag pointing to an element, accumulated with a combiner."""
+  """StateTag pointing to an element, accumulated with a combiner.
+
+  The given tag must be unique for this step. The given CombineFn will be
+  applied (possibly incrementally and eagerly) when adding elements."""
 
   # TODO(robertwb): Also store the coder (perhaps extracted from the combine_fn)
   def __init__(self, tag, combine_fn):
@@ -104,6 +127,15 @@ class _CombiningValueStateTag(_StateTag):
 
   def with_prefix(self, prefix):
     return _CombiningValueStateTag(prefix + self.tag, self.combine_fn)
+
+  def without_extraction(self):
+    class NoExtractionCombineFn(core.CombineFn):
+      create_accumulator = self.combine_fn.create_accumulator
+      add_input = self.combine_fn.add_input
+      merge_accumulators = self.combine_fn.merge_accumulators
+      compact = self.combine_fn.compact
+      extract_output = staticmethod(lambda x: x)
+    return _CombiningValueStateTag(self.tag, NoExtractionCombineFn())
 
 
 class _ListStateTag(_StateTag):
@@ -132,12 +164,11 @@ class _WatermarkHoldStateTag(_StateTag):
 
 # pylint: disable=unused-argument
 # TODO(robertwb): Provisional API, Java likely to change as well.
-class TriggerFn(object):
+class TriggerFn(with_metaclass(ABCMeta, object)):  # type: ignore[misc]
   """A TriggerFn determines when window (panes) are emitted.
 
   See https://beam.apache.org/documentation/programming-guide/#triggers
   """
-  __metaclass__ = ABCMeta
 
   @abstractmethod
   def on_element(self, element, window, context):
@@ -164,17 +195,32 @@ class TriggerFn(object):
     pass
 
   @abstractmethod
-  def should_fire(self, watermark, window, context):
+  def should_fire(self, time_domain, timestamp, window, context):
     """Whether this trigger should cause the window to fire.
 
     Args:
-      watermark: (a lower bound on) the watermark of the system
+      time_domain: WATERMARK for event-time timers and REAL_TIME for
+          processing-time timers.
+      timestamp: for time_domain WATERMARK, it represents the
+          watermark: (a lower bound on) the watermark of the system
+          and for time_domain REAL_TIME, it represents the
+          trigger: timestamp of the processing-time timer.
       window: the window whose trigger is being considered
       context: a context (e.g. a TriggerContext instance) for managing state
           and setting timers
 
     Returns:
       whether this trigger should cause a firing
+    """
+    pass
+
+  @abstractmethod
+  def has_ontime_pane(self):
+    """Whether this trigger creates an empty pane even if there are no elements.
+
+    Returns:
+      True if this trigger guarantees that there will always be an ON_TIME pane
+      even if there are no elements in that pane.
     """
     pass
 
@@ -206,6 +252,7 @@ class TriggerFn(object):
         'after_any': AfterAny,
         'after_each': AfterEach,
         'after_end_of_window': AfterWatermark,
+        'after_processing_time': AfterProcessingTime,
         # after_processing_time, after_synchronized_processing_time
         # always
         'default': DefaultTrigger,
@@ -218,6 +265,10 @@ class TriggerFn(object):
   @abstractmethod
   def to_runner_api(self, unused_context):
     pass
+
+  def __ne__(self, other):
+    # TODO(BEAM-5949): Needed for Python 2 compatibility.
+    return not self == other
 
 
 class DefaultTrigger(TriggerFn):
@@ -238,7 +289,11 @@ class DefaultTrigger(TriggerFn):
       if window.end != merge_result.end:
         context.clear_timer('', TimeDomain.WATERMARK)
 
-  def should_fire(self, watermark, window, context):
+  def should_fire(self, time_domain, watermark, window, context):
+    if watermark >= window.end:
+      # Explicitly clear the timer so that late elements are not emitted again
+      # when the timer is fired.
+      context.clear_timer('', TimeDomain.WATERMARK)
     return watermark >= window.end
 
   def on_fire(self, watermark, window, context):
@@ -250,6 +305,9 @@ class DefaultTrigger(TriggerFn):
   def __eq__(self, other):
     return type(self) == type(other)
 
+  def __hash__(self):
+    return hash(type(self))
+
   @staticmethod
   def from_runner_api(proto, context):
     return DefaultTrigger()
@@ -257,6 +315,61 @@ class DefaultTrigger(TriggerFn):
   def to_runner_api(self, unused_context):
     return beam_runner_api_pb2.Trigger(
         default=beam_runner_api_pb2.Trigger.Default())
+
+  def has_ontime_pane(self):
+    return True
+
+
+class AfterProcessingTime(TriggerFn):
+  """Fire exactly once after a specified delay from processing time.
+
+  AfterProcessingTime is experimental. No backwards compatibility guarantees.
+  """
+
+  def __init__(self, delay=0):
+    """Initialize a processing time trigger with a delay in seconds."""
+    self.delay = delay
+
+  def __repr__(self):
+    return 'AfterProcessingTime(delay=%d)' % self.delay
+
+  def on_element(self, element, window, context):
+    context.set_timer(
+        '', TimeDomain.REAL_TIME, context.get_current_time() + self.delay)
+
+  def on_merge(self, to_be_merged, merge_result, context):
+    # timers will be kept through merging
+    pass
+
+  def should_fire(self, time_domain, timestamp, window, context):
+    if time_domain == TimeDomain.REAL_TIME:
+      return True
+
+  def on_fire(self, timestamp, window, context):
+    return True
+
+  def reset(self, window, context):
+    pass
+
+  @staticmethod
+  def from_runner_api(proto, context):
+    return AfterProcessingTime(
+        delay=(
+            proto.after_processing_time
+            .timestamp_transforms[0]
+            .delay
+            .delay_millis) // 1000)
+
+  def to_runner_api(self, context):
+    delay_proto = beam_runner_api_pb2.TimestampTransform(
+        delay=beam_runner_api_pb2.TimestampTransform.Delay(
+            delay_millis=self.delay * 1000))
+    return beam_runner_api_pb2.Trigger(
+        after_processing_time=beam_runner_api_pb2.Trigger.AfterProcessingTime(
+            timestamp_transforms=[delay_proto]))
+
+  def has_ontime_pane(self):
+    return False
 
 
 class AfterWatermark(TriggerFn):
@@ -308,15 +421,18 @@ class AfterWatermark(TriggerFn):
         self.early.on_merge(
             to_be_merged, merge_result, NestedContext(context, 'early'))
 
-  def should_fire(self, watermark, window, context):
+  def should_fire(self, time_domain, watermark, window, context):
     if self.is_late(context):
-      return self.late.should_fire(
-          watermark, window, NestedContext(context, 'late'))
+      return self.late.should_fire(time_domain, watermark,
+                                   window, NestedContext(context, 'late'))
     elif watermark >= window.end:
+      # Explicitly clear the timer so that late elements are not emitted again
+      # when the timer is fired.
+      context.clear_timer('', TimeDomain.WATERMARK)
       return True
     elif self.early:
-      return self.early.should_fire(
-          watermark, window, NestedContext(context, 'early'))
+      return self.early.should_fire(time_domain, watermark,
+                                    window, NestedContext(context, 'early'))
     return False
 
   def on_fire(self, watermark, window, context):
@@ -368,6 +484,9 @@ class AfterWatermark(TriggerFn):
             early_firings=early_proto,
             late_firings=late_proto))
 
+  def has_ontime_pane(self):
+    return True
+
 
 class AfterCount(TriggerFn):
   """Fire when there are at least count elements in this window pane.
@@ -378,6 +497,8 @@ class AfterCount(TriggerFn):
   COUNT_TAG = _CombiningValueStateTag('count', combiners.CountCombineFn())
 
   def __init__(self, count):
+    if not isinstance(count, numbers.Integral) or count < 1:
+      raise ValueError("count (%d) must be a positive integer." % count)
     self.count = count
 
   def __repr__(self):
@@ -386,6 +507,9 @@ class AfterCount(TriggerFn):
   def __eq__(self, other):
     return type(self) == type(other) and self.count == other.count
 
+  def __hash__(self):
+    return hash(self.count)
+
   def on_element(self, element, window, context):
     context.add_state(self.COUNT_TAG, 1)
 
@@ -393,7 +517,7 @@ class AfterCount(TriggerFn):
     # states automatically merged
     pass
 
-  def should_fire(self, watermark, window, context):
+  def should_fire(self, time_domain, watermark, window, context):
     return context.get_state(self.COUNT_TAG) >= self.count
 
   def on_fire(self, watermark, window, context):
@@ -411,6 +535,8 @@ class AfterCount(TriggerFn):
         element_count=beam_runner_api_pb2.Trigger.ElementCount(
             element_count=self.count))
 
+  def has_ontime_pane(self):
+    return False
 
 class Repeatedly(TriggerFn):
   """Repeatedly invoke the given trigger, never finishing."""
@@ -424,14 +550,17 @@ class Repeatedly(TriggerFn):
   def __eq__(self, other):
     return type(self) == type(other) and self.underlying == other.underlying
 
-  def on_element(self, element, window, context):  # get window from context?
+  def __hash__(self):
+    return hash(self.underlying)
+
+  def on_element(self, element, window, context):
     self.underlying.on_element(element, window, context)
 
   def on_merge(self, to_be_merged, merge_result, context):
     self.underlying.on_merge(to_be_merged, merge_result, context)
 
-  def should_fire(self, watermark, window, context):
-    return self.underlying.should_fire(watermark, window, context)
+  def should_fire(self, time_domain, watermark, window, context):
+    return self.underlying.should_fire(time_domain, watermark, window, context)
 
   def on_fire(self, watermark, window, context):
     if self.underlying.on_fire(watermark, window, context):
@@ -451,10 +580,11 @@ class Repeatedly(TriggerFn):
         repeat=beam_runner_api_pb2.Trigger.Repeat(
             subtrigger=self.underlying.to_runner_api(context)))
 
+  def has_ontime_pane(self):
+    return self.underlying.has_ontime_pane()
 
-class _ParallelTriggerFn(TriggerFn):
 
-  __metaclass__ = ABCMeta
+class _ParallelTriggerFn(with_metaclass(ABCMeta, TriggerFn)):  # type: ignore[misc]
 
   def __init__(self, *triggers):
     self.triggers = triggers
@@ -465,6 +595,9 @@ class _ParallelTriggerFn(TriggerFn):
 
   def __eq__(self, other):
     return type(self) == type(other) and self.triggers == other.triggers
+
+  def __hash__(self):
+    return hash(self.triggers)
 
   @abstractmethod
   def combine_op(self, trigger_results):
@@ -479,16 +612,19 @@ class _ParallelTriggerFn(TriggerFn):
       trigger.on_merge(
           to_be_merged, merge_result, self._sub_context(context, ix))
 
-  def should_fire(self, watermark, window, context):
+  def should_fire(self, time_domain, watermark, window, context):
+    self._time_domain = time_domain
     return self.combine_op(
-        trigger.should_fire(watermark, window, self._sub_context(context, ix))
+        trigger.should_fire(time_domain, watermark, window,
+                            self._sub_context(context, ix))
         for ix, trigger in enumerate(self.triggers))
 
   def on_fire(self, watermark, window, context):
     finished = []
     for ix, trigger in enumerate(self.triggers):
       nested_context = self._sub_context(context, ix)
-      if trigger.should_fire(watermark, window, nested_context):
+      if trigger.should_fire(TimeDomain.WATERMARK, watermark,
+                             window, nested_context):
         finished.append(trigger.on_fire(watermark, window, nested_context))
     return self.combine_op(finished)
 
@@ -525,6 +661,8 @@ class _ParallelTriggerFn(TriggerFn):
     else:
       raise NotImplementedError(self)
 
+  def has_ontime_pane(self):
+    return any(t.has_ontime_pane() for t in self.triggers)
 
 class AfterAny(_ParallelTriggerFn):
   """Fires when any subtrigger fires.
@@ -557,6 +695,9 @@ class AfterEach(TriggerFn):
   def __eq__(self, other):
     return type(self) == type(other) and self.triggers == other.triggers
 
+  def __hash__(self):
+    return hash(self.triggers)
+
   def on_element(self, element, window, context):
     ix = context.get_state(self.INDEX_TAG)
     if ix < len(self.triggers):
@@ -572,11 +713,11 @@ class AfterEach(TriggerFn):
       self.triggers[ix].on_merge(
           to_be_merged, merge_result, self._sub_context(context, ix))
 
-  def should_fire(self, watermark, window, context):
+  def should_fire(self, time_domain, watermark, window, context):
     ix = context.get_state(self.INDEX_TAG)
     if ix < len(self.triggers):
       return self.triggers[ix].should_fire(
-          watermark, window, self._sub_context(context, ix))
+          time_domain, watermark, window, self._sub_context(context, ix))
 
   def on_fire(self, watermark, window, context):
     ix = context.get_state(self.INDEX_TAG)
@@ -609,6 +750,8 @@ class AfterEach(TriggerFn):
                 subtrigger.to_runner_api(context)
                 for subtrigger in self.triggers]))
 
+  def has_ontime_pane(self):
+    return any(t.has_ontime_pane() for t in self.triggers)
 
 class OrFinally(AfterAny):
 
@@ -630,9 +773,13 @@ class OrFinally(AfterAny):
 
 class TriggerContext(object):
 
-  def __init__(self, outer, window):
+  def __init__(self, outer, window, clock):
     self._outer = outer
     self._window = window
+    self._clock = clock
+
+  def get_current_time(self):
+    return self._clock.time()
 
   def set_timer(self, name, time_domain, timestamp):
     self._outer.set_timer(self._window, name, time_domain, timestamp)
@@ -657,6 +804,9 @@ class NestedContext(object):
     self._outer = outer
     self._prefix = prefix
 
+  def get_current_time(self):
+    return self._outer.get_current_time()
+
   def set_timer(self, name, time_domain, timestamp):
     self._outer.set_timer(self._prefix + name, time_domain, timestamp)
 
@@ -674,13 +824,11 @@ class NestedContext(object):
 
 
 # pylint: disable=unused-argument
-class SimpleState(object):
+class SimpleState(with_metaclass(ABCMeta, object)):  # type: ignore[misc]
   """Basic state storage interface used for triggering.
 
   Only timers must hold the watermark (by their timestamp).
   """
-
-  __metaclass__ = ABCMeta
 
   @abstractmethod
   def set_timer(self, window, name, time_domain, timestamp):
@@ -706,8 +854,8 @@ class SimpleState(object):
   def clear_state(self, window, tag):
     pass
 
-  def at(self, window):
-    return TriggerContext(self, window)
+  def at(self, window, clock):
+    return NestedContext(TriggerContext(self, window, clock), 'trigger')
 
 
 class UnmergedState(SimpleState):
@@ -749,26 +897,25 @@ class MergeableStateAdapter(SimpleState):
     if isinstance(tag, _ValueStateTag):
       raise ValueError(
           'Merging requested for non-mergeable state tag: %r.' % tag)
+    elif isinstance(tag, _CombiningValueStateTag):
+      tag = tag.without_extraction()
     self.raw_state.add_state(self._get_id(window), tag, value)
 
   def get_state(self, window, tag):
+    if isinstance(tag, _CombiningValueStateTag):
+      original_tag, tag = tag, tag.without_extraction()
     values = [self.raw_state.get_state(window_id, tag)
               for window_id in self._get_ids(window)]
     if isinstance(tag, _ValueStateTag):
       raise ValueError(
           'Merging requested for non-mergeable state tag: %r.' % tag)
     elif isinstance(tag, _CombiningValueStateTag):
-      # TODO(robertwb): Strip combine_fn.extract_output from raw_state tag.
-      if not values:
-        accumulator = tag.combine_fn.create_accumulator()
-      elif len(values) == 1:
-        accumulator = values[0]
-      else:
-        accumulator = tag.combine_fn.merge_accumulators(values)
-        # TODO(robertwb): Store the merged value in the first tag.
-      return tag.combine_fn.extract_output(accumulator)
+      return original_tag.combine_fn.extract_output(
+          original_tag.combine_fn.merge_accumulators(values))
     elif isinstance(tag, _ListStateTag):
       return [v for vs in values for v in vs]
+    elif isinstance(tag, _SetStateTag):
+      return {v for vs in values for v in vs}
     elif isinstance(tag, _WatermarkHoldStateTag):
       return tag.timestamp_combiner_impl.combine_all(values)
     else:
@@ -793,7 +940,7 @@ class MergeableStateAdapter(SimpleState):
           self._persist_window_ids()
 
   def known_windows(self):
-    return self.window_ids.keys()
+    return list(self.window_ids)
 
   def get_window(self, window_id):
     for window, ids in self.window_ids.items():
@@ -829,15 +976,21 @@ class MergeableStateAdapter(SimpleState):
                        repr(self.raw_state).split('\n'))
 
 
-def create_trigger_driver(windowing, is_batch=False, phased_combine_fn=None):
+def create_trigger_driver(windowing,
+                          is_batch=False, phased_combine_fn=None, clock=None):
   """Create the TriggerDriver for the given windowing and options."""
 
   # TODO(robertwb): We can do more if we know elements are in timestamp
   # sorted order.
   if windowing.is_default() and is_batch:
-    driver = DefaultGlobalBatchTriggerDriver()
+    driver = BatchGlobalTriggerDriver()
+  elif (windowing.windowfn == GlobalWindows()
+        and windowing.triggerfn == AfterCount(1)
+        and is_batch):
+    # Here we also just pass through all the values exactly once.
+    driver = BatchGlobalTriggerDriver()
   else:
-    driver = GeneralTriggerDriver(windowing)
+    driver = GeneralTriggerDriver(windowing, clock)
 
   if phased_combine_fn:
     # TODO(ccy): Refactor GeneralTriggerDriver to combine values eagerly using
@@ -846,24 +999,25 @@ def create_trigger_driver(windowing, is_batch=False, phased_combine_fn=None):
   return driver
 
 
-class TriggerDriver(object):
+class TriggerDriver(with_metaclass(ABCMeta, object)):  # type: ignore[misc]
   """Breaks a series of bundle and timer firings into window (pane)s."""
 
-  __metaclass__ = ABCMeta
-
   @abstractmethod
-  def process_elements(self, state, windowed_values, output_watermark):
+  def process_elements(self, state, windowed_values, output_watermark,
+                       input_watermark=MIN_TIMESTAMP):
     pass
 
   @abstractmethod
-  def process_timer(self, window_id, name, time_domain, timestamp, state):
+  def process_timer(self, window_id, name, time_domain, timestamp, state,
+                    input_watermark=None):
     pass
 
-  def process_entire_key(
-      self, key, windowed_values, output_watermark=MIN_TIMESTAMP):
+  def process_entire_key(self, key, windowed_values,
+                         unused_output_watermark=None,
+                         unused_input_watermark=None):
     state = InMemoryUnmergedState()
     for wvalue in self.process_elements(
-        state, windowed_values, output_watermark):
+        state, windowed_values, MIN_TIMESTAMP, MIN_TIMESTAMP):
       yield wvalue.with_value((key, wvalue.value))
     while state.timers:
       fired = state.get_and_clear_timers()
@@ -896,29 +1050,44 @@ class _UnwindowedValues(observable.ObservableMixin):
     if isinstance(other, collections.Iterable):
       return all(
           a == b
-          for a, b in itertools.izip_longest(self, other, fillvalue=object()))
+          for a, b in zip_longest(self, other, fillvalue=object()))
     else:
       return NotImplemented
 
+  def __hash__(self):
+    return hash(tuple(self))
+
   def __ne__(self, other):
+    # TODO(BEAM-5949): Needed for Python 2 compatibility.
     return not self == other
 
 
-class DefaultGlobalBatchTriggerDriver(TriggerDriver):
-  """Breaks a bundles into window (pane)s according to the default triggering.
+coder_impl.FastPrimitivesCoderImpl.register_iterable_like_type(
+    _UnwindowedValues)
+
+
+class BatchGlobalTriggerDriver(TriggerDriver):
+  """Groups all received values together.
   """
   GLOBAL_WINDOW_TUPLE = (GlobalWindow(),)
+  ONLY_FIRING = windowed_value.PaneInfo(
+      is_first=True,
+      is_last=True,
+      timing=windowed_value.PaneInfoTiming.ON_TIME,
+      index=0,
+      nonspeculative_index=0)
 
-  def __init__(self):
-    pass
-
-  def process_elements(self, state, windowed_values, unused_output_watermark):
+  def process_elements(self, state, windowed_values,
+                       unused_output_watermark,
+                       unused_input_watermark=MIN_TIMESTAMP):
     yield WindowedValue(
         _UnwindowedValues(windowed_values),
         MIN_TIMESTAMP,
-        self.GLOBAL_WINDOW_TUPLE)
+        self.GLOBAL_WINDOW_TUPLE,
+        self.ONLY_FIRING)
 
-  def process_timer(self, window_id, name, time_domain, timestamp, state):
+  def process_timer(self, window_id, name, time_domain, timestamp, state,
+                    input_watermark=None):
     raise TypeError('Triggers never set or called for batch default windowing.')
 
 
@@ -929,15 +1098,19 @@ class CombiningTriggerDriver(TriggerDriver):
     self.phased_combine_fn = phased_combine_fn
     self.underlying = underlying
 
-  def process_elements(self, state, windowed_values, output_watermark):
+  def process_elements(self, state, windowed_values, output_watermark,
+                       input_watermark=MIN_TIMESTAMP):
     uncombined = self.underlying.process_elements(state, windowed_values,
-                                                  output_watermark)
+                                                  output_watermark,
+                                                  input_watermark)
     for output in uncombined:
       yield output.with_value(self.phased_combine_fn.apply(output.value))
 
-  def process_timer(self, window_id, name, time_domain, timestamp, state):
+  def process_timer(self, window_id, name, time_domain, timestamp, state,
+                    input_watermark=None):
     uncombined = self.underlying.process_timer(window_id, name, time_domain,
-                                               timestamp, state)
+                                               timestamp, state,
+                                               input_watermark)
     for output in uncombined:
       yield output.with_value(self.phased_combine_fn.apply(output.value))
 
@@ -949,8 +1122,12 @@ class GeneralTriggerDriver(TriggerDriver):
   """
   ELEMENTS = _ListStateTag('elements')
   TOMBSTONE = _CombiningValueStateTag('tombstone', combiners.CountCombineFn())
+  INDEX = _CombiningValueStateTag('index', combiners.CountCombineFn())
+  NONSPECULATIVE_INDEX = _CombiningValueStateTag(
+      'nonspeculative_index', combiners.CountCombineFn())
 
-  def __init__(self, windowing):
+  def __init__(self, windowing, clock):
+    self.clock = clock
     self.window_fn = windowing.windowfn
     self.timestamp_combiner_impl = TimestampCombiner.get_impl(
         windowing.timestamp_combiner, self.window_fn)
@@ -962,7 +1139,8 @@ class GeneralTriggerDriver(TriggerDriver):
     self.accumulation_mode = windowing.accumulation_mode
     self.is_merging = True
 
-  def process_elements(self, state, windowed_values, output_watermark):
+  def process_elements(self, state, windowed_values, output_watermark,
+                       input_watermark=MIN_TIMESTAMP):
     if self.is_merging:
       state = MergeableStateAdapter(state)
 
@@ -974,7 +1152,7 @@ class GeneralTriggerDriver(TriggerDriver):
     # First handle merging.
     if self.is_merging:
       old_windows = set(state.known_windows())
-      all_windows = old_windows.union(windows_to_elements.keys())
+      all_windows = old_windows.union(list(windows_to_elements))
 
       if all_windows != old_windows:
         merged_away = {}
@@ -988,7 +1166,7 @@ class GeneralTriggerDriver(TriggerDriver):
             state.merge(to_be_merged, merge_result)
             # using the outer self argument.
             self.trigger_fn.on_merge(
-                to_be_merged, merge_result, state.at(merge_result))
+                to_be_merged, merge_result, state.at(merge_result, self.clock))
 
         self.window_fn.merge(TriggerMergeContext(all_windows))
 
@@ -1017,35 +1195,68 @@ class GeneralTriggerDriver(TriggerDriver):
       if output_time is not None:
         state.add_state(window, self.WATERMARK_HOLD, output_time)
 
-      context = state.at(window)
+      context = state.at(window, self.clock)
       for value, unused_timestamp in elements:
         state.add_state(window, self.ELEMENTS, value)
         self.trigger_fn.on_element(value, window, context)
 
       # Maybe fire this window.
-      watermark = MIN_TIMESTAMP
-      if self.trigger_fn.should_fire(watermark, window, context):
-        finished = self.trigger_fn.on_fire(watermark, window, context)
-        yield self._output(window, finished, state)
+      if self.trigger_fn.should_fire(TimeDomain.WATERMARK, input_watermark,
+                                     window, context):
+        finished = self.trigger_fn.on_fire(input_watermark, window, context)
+        yield self._output(window, finished, state, input_watermark,
+                           output_watermark, False)
 
   def process_timer(self, window_id, unused_name, time_domain, timestamp,
-                    state):
+                    state, input_watermark=None):
+    if input_watermark is None:
+      input_watermark = timestamp
+
     if self.is_merging:
       state = MergeableStateAdapter(state)
     window = state.get_window(window_id)
     if state.get_state(window, self.TOMBSTONE):
       return
-    if time_domain == TimeDomain.WATERMARK:
+
+    if time_domain in (TimeDomain.WATERMARK, TimeDomain.REAL_TIME):
       if not self.is_merging or window in state.known_windows():
-        context = state.at(window)
-        if self.trigger_fn.should_fire(timestamp, window, context):
+        context = state.at(window, self.clock)
+        if self.trigger_fn.should_fire(time_domain, timestamp,
+                                       window, context):
           finished = self.trigger_fn.on_fire(timestamp, window, context)
-          yield self._output(window, finished, state)
+          yield self._output(window, finished, state, input_watermark,
+                             timestamp, time_domain == TimeDomain.WATERMARK)
     else:
       raise Exception('Unexpected time domain: %s' % time_domain)
 
-  def _output(self, window, finished, state):
+  def _output(self, window, finished, state, input_watermark, output_watermark,
+              maybe_ontime):
     """Output window and clean up if appropriate."""
+    index = state.get_state(window, self.INDEX)
+    state.add_state(window, self.INDEX, 1)
+    if output_watermark <= window.max_timestamp():
+      nonspeculative_index = -1
+      timing = windowed_value.PaneInfoTiming.EARLY
+      if state.get_state(window, self.NONSPECULATIVE_INDEX):
+        nonspeculative_index = state.get_state(
+            window, self.NONSPECULATIVE_INDEX)
+        state.add_state(window, self.NONSPECULATIVE_INDEX, 1)
+        windowed_value.PaneInfoTiming.LATE
+        _LOGGER.warning('Watermark moved backwards in time '
+                        'or late data moved window end forward.')
+    else:
+      nonspeculative_index = state.get_state(window, self.NONSPECULATIVE_INDEX)
+      state.add_state(window, self.NONSPECULATIVE_INDEX, 1)
+      timing = (
+          windowed_value.PaneInfoTiming.ON_TIME
+          if maybe_ontime and nonspeculative_index == 0
+          else windowed_value.PaneInfoTiming.LATE)
+    pane_info = windowed_value.PaneInfo(
+        index == 0,
+        finished,
+        timing,
+        index,
+        nonspeculative_index)
 
     values = state.get_state(window, self.ELEMENTS)
     if finished:
@@ -1058,11 +1269,15 @@ class GeneralTriggerDriver(TriggerDriver):
     timestamp = state.get_state(window, self.WATERMARK_HOLD)
     if timestamp is None:
       # If no watermark hold was set, output at end of window.
-      timestamp = window.end
+      timestamp = window.max_timestamp()
+    elif input_watermark < window.end and self.trigger_fn.has_ontime_pane():
+      # Hold the watermark in case there is an empty pane that needs to be fired
+      # at the end of the window.
+      pass
     else:
       state.clear_state(window, self.WATERMARK_HOLD)
 
-    return WindowedValue(values, timestamp, (window,))
+    return WindowedValue(values, timestamp, (window,), pane_info)
 
 
 class InMemoryUnmergedState(UnmergedState):
@@ -1112,8 +1327,11 @@ class InMemoryUnmergedState(UnmergedState):
     if isinstance(tag, _ValueStateTag):
       self.state[window][tag.tag] = value
     elif isinstance(tag, _CombiningValueStateTag):
+      # TODO(robertwb): Store merged accumulators.
       self.state[window][tag.tag].append(value)
     elif isinstance(tag, _ListStateTag):
+      self.state[window][tag.tag].append(value)
+    elif isinstance(tag, _SetStateTag):
       self.state[window][tag.tag].append(value)
     elif isinstance(tag, _WatermarkHoldStateTag):
       self.state[window][tag.tag].append(value)
@@ -1128,6 +1346,8 @@ class InMemoryUnmergedState(UnmergedState):
       return tag.combine_fn.apply(values)
     elif isinstance(tag, _ListStateTag):
       return values
+    elif isinstance(tag, _SetStateTag):
+      return values
     elif isinstance(tag, _WatermarkHoldStateTag):
       return tag.timestamp_combiner_impl.combine_all(values)
     else:
@@ -1138,24 +1358,41 @@ class InMemoryUnmergedState(UnmergedState):
     if not self.state[window]:
       self.state.pop(window, None)
 
-  def get_timers(self, clear=False, watermark=MAX_TIMESTAMP):
+  def get_timers(self, clear=False, watermark=MAX_TIMESTAMP,
+                 processing_time=None):
+    """Gets expired timers and reports if there
+    are any realtime timers set per state.
+
+    Expiration is measured against the watermark for event-time timers,
+    and against a wall clock for processing-time timers.
+    """
     expired = []
+    has_realtime_timer = False
     for window, timers in list(self.timers.items()):
       for (name, time_domain), timestamp in list(timers.items()):
-        if timestamp <= watermark:
+        if time_domain == TimeDomain.REAL_TIME:
+          time_marker = processing_time
+          has_realtime_timer = True
+        elif time_domain == TimeDomain.WATERMARK:
+          time_marker = watermark
+        else:
+          _LOGGER.error(
+              'TimeDomain error: No timers defined for time domain %s.',
+              time_domain)
+        if timestamp <= time_marker:
           expired.append((window, (name, time_domain, timestamp)))
           if clear:
             del timers[(name, time_domain)]
       if not timers and clear:
         del self.timers[window]
-    return expired
+    return expired, has_realtime_timer
 
   def get_and_clear_timers(self, watermark=MAX_TIMESTAMP):
-    return self.get_timers(clear=True, watermark=watermark)
+    return self.get_timers(clear=True, watermark=watermark)[0]
 
   def get_earliest_hold(self):
     earliest_hold = MAX_TIMESTAMP
-    for unused_window, tagged_states in self.state.iteritems():
+    for unused_window, tagged_states in iteritems(self.state):
       # TODO(BEAM-2519): currently, this assumes that the watermark hold tag is
       # named "watermark".  This is currently only true because the only place
       # watermark holds are set is in the GeneralTriggerDriver, where we use

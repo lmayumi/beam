@@ -15,18 +15,160 @@
 # limitations under the License.
 #
 
+# cython: language_level=3
 # cython: profile=True
 
 """Counters collect the progress of the Worker for reporting to the service."""
 
 from __future__ import absolute_import
+from __future__ import division
 
 import math
 import random
+from builtins import hex
+from builtins import object
+from typing import TYPE_CHECKING
+from typing import Optional
 
+from apache_beam.utils import counters
 from apache_beam.utils.counters import Counter
+from apache_beam.utils.counters import CounterName
+
+if TYPE_CHECKING:
+  from apache_beam.utils import windowed_value
+  from apache_beam.runners.worker.statesampler import StateSampler
 
 # This module is experimental. No backwards-compatibility guarantees.
+
+
+class TransformIOCounter(object):
+  """Class to track time and bytes consumed while reading from IO.
+
+  Subclasses should be able to track consumption of IO across steps
+  in the same stage - for instance, if a Shuffle or Side Input iterable
+  is passed down to a next step.
+
+  Some examples of IO can be side inputs, shuffle, or streaming state.
+  """
+
+  def __init__(self, counter_factory, state_sampler):
+    """Create a new IO read counter.
+
+    Args:
+      counter_factory: A counters.CounterFactory to create byte counters.
+      state_sampler: A statesampler.StateSampler to transition into read states.
+    """
+    self._counter_factory = counter_factory
+    self._state_sampler = state_sampler
+    self._latest_step = None
+    self.bytes_read_counter = None
+    self.scoped_state = None
+
+  def update_current_step(self):
+    """Update the current running step.
+
+    Due to the fusion optimization, user code may choose to emit the data
+    structure that holds side inputs (Iterable, Dict, or others). This call
+    updates the current step, to attribute the data consumption to the step
+    that is responsible for actual consumption.
+
+    CounterName uses the io_target field for information pertinent to the
+    consumption of IO.
+    """
+    current_state = self._state_sampler.current_state()
+    current_step_name = current_state.name.step_name
+    if current_step_name != self._latest_step:
+      self._latest_step = current_step_name
+      self._update_counters_for_requesting_step(current_step_name)
+
+  def _update_counters_for_requesting_step(self, step_name):
+    pass
+
+  def add_bytes_read(self, count):
+    if count > 0 and self.bytes_read_counter:
+      self.bytes_read_counter.update(count)
+
+  def __enter__(self):
+    self.scoped_state.__enter__()
+
+  def __exit__(self, exception_type, exception_value, traceback):
+    self.scoped_state.__exit__(exception_type, exception_value, traceback)
+
+
+class NoOpTransformIOCounter(TransformIOCounter):
+  """All operations for IO tracking are no-ops."""
+
+  def __init__(self):
+    super(NoOpTransformIOCounter, self).__init__(None, None)
+
+  def update_current_step(self):
+    pass
+
+  def __enter__(self):
+    pass
+
+  def __exit__(self, exception_type, exception_value, traceback):
+    pass
+
+  def add_bytes_read(self, count):
+    pass
+
+
+class SideInputReadCounter(TransformIOCounter):
+  """Tracks time and bytes consumed while reading from side inputs.
+
+  This class is designed to track consumption of side inputs across fused steps.
+  We represent a side input as a declaring step, and an input index.
+
+  The declaring step is the step that originally receives the side input for
+  consumption, and the input index in which the declaring step receives the side
+  input that we want to identify.
+
+  Note that the declaring step originally receives the side input, but it may
+  not be the only step that spends time reading from this side input.
+  """
+
+  def __init__(self,
+               counter_factory,
+               state_sampler,  # type: StateSampler
+               declaring_step,
+               input_index
+              ):
+    """Create a side input read counter.
+
+    Args:
+      counter_factory: A counters.CounterFactory to create byte counters.
+      state_sampler: A statesampler.StateSampler to transition into read states.
+      declaring_step: A string with the step name of the step that directly
+        receives the side input initially.
+      input_index: The index of the side input in the list of inputs of the
+        declaring step.
+
+    The side input is uniquely identified by (declaring_step, input_index);
+    where declaring_step is the step that receives the PCollectionView as a
+    side input, and input_index is the index of the PCollectionView within
+    the list of inputs.
+    """
+    super(SideInputReadCounter, self).__init__(counter_factory, state_sampler)
+    self.declaring_step = declaring_step
+    self.input_index = input_index
+
+    # Side inputs are set up within the start state of the first receiving
+    # step. We check the current state to create the internal counters.
+    self.update_current_step()
+
+  def _update_counters_for_requesting_step(self, step_name):
+    side_input_id = counters.side_input_id(step_name, self.input_index)
+    self.scoped_state = self._state_sampler.scoped_state(
+        self.declaring_step,
+        'read-sideinput',
+        io_target=side_input_id)
+    self.bytes_read_counter = self._counter_factory.get_counter(
+        CounterName(
+            'read-sideinput-byte-count',
+            step_name=self.declaring_step,
+            io_target=side_input_id),
+        Counter.SUM)
 
 
 class SumAccumulator(object):
@@ -45,20 +187,27 @@ class SumAccumulator(object):
 class OperationCounters(object):
   """The set of basic counters to attach to an Operation."""
 
-  def __init__(self, counter_factory, step_name, coder, output_index):
+  def __init__(self,
+               counter_factory,
+               step_name,  # type: str
+               coder,
+               output_index
+              ):
     self._counter_factory = counter_factory
     self.element_counter = counter_factory.get_counter(
         '%s-out%s-ElementCount' % (step_name, output_index), Counter.SUM)
     self.mean_byte_counter = counter_factory.get_counter(
-        '%s-out%s-MeanByteCount' % (step_name, output_index), Counter.MEAN)
+        '%s-out%s-MeanByteCount' % (step_name, output_index),
+        Counter.BEAM_DISTRIBUTION)
     self.coder_impl = coder.get_impl() if coder else None
-    self.active_accumulator = None
+    self.active_accumulator = None  # type: Optional[SumAccumulator]
+    self.current_size = None  # type: Optional[int]
     self._sample_counter = 0
     self._next_sample = 0
 
   def update_from(self, windowed_value):
+    # type: (windowed_value.WindowedValue) -> None
     """Add one value to this counter."""
-    self.element_counter.update(1)
     if self._should_sample():
       self.do_sample(windowed_value)
 
@@ -77,10 +226,11 @@ class OperationCounters(object):
     return _observable_callback_inner
 
   def do_sample(self, windowed_value):
+    # type: (windowed_value.WindowedValue) -> None
     size, observables = (
         self.coder_impl.get_estimated_size_and_observables(windowed_value))
     if not observables:
-      self.mean_byte_counter.update(size)
+      self.current_size = size
     else:
       self.active_accumulator = SumAccumulator()
       self.active_accumulator.update(size)
@@ -95,13 +245,17 @@ class OperationCounters(object):
     Now that the element has been processed, we ask our accumulator
     for the total and store the result in a counter.
     """
-    if self.active_accumulator is not None:
+    self.element_counter.update(1)
+    if self.current_size is not None:
+      self.mean_byte_counter.update(self.current_size)
+      self.current_size = None
+    elif self.active_accumulator is not None:
       self.mean_byte_counter.update(self.active_accumulator.value())
       self.active_accumulator = None
 
   def _compute_next_sample(self, i):
     # https://en.wikipedia.org/wiki/Reservoir_sampling#Fast_Approximation
-    gap = math.log(1.0 - random.random()) / math.log(1.0 - 10.0/i)
+    gap = math.log(1.0 - random.random()) / math.log(1.0 - (10.0 / i))
     return i + math.floor(gap)
 
   def _should_sample(self):
@@ -156,6 +310,9 @@ class OperationCounters(object):
     # We create this separate method because the above "_should_sample()" method
     # is marked as inline in Cython and thus can't be exposed to Python code.
     return self._should_sample()
+
+  def restart_sampling(self):
+    self._sample_counter = 0
 
   def __str__(self):
     return '<%s [%s]>' % (self.__class__.__name__,

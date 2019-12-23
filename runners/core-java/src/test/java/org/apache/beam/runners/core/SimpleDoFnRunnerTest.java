@@ -24,8 +24,6 @@ import static org.junit.Assert.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ListMultimap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -37,6 +35,7 @@ import org.apache.beam.sdk.state.Timer;
 import org.apache.beam.sdk.state.TimerSpec;
 import org.apache.beam.sdk.state.TimerSpecs;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.DoFnSchemaInformation;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
@@ -45,6 +44,8 @@ import org.apache.beam.sdk.util.UserCodeException;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.WindowingStrategy;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ArrayListMultimap;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ListMultimap;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.joda.time.format.PeriodFormat;
@@ -62,8 +63,7 @@ import org.mockito.MockitoAnnotations;
 public class SimpleDoFnRunnerTest {
   @Rule public ExpectedException thrown = ExpectedException.none();
 
-  @Mock
-  StepContext mockStepContext;
+  @Mock StepContext mockStepContext;
 
   @Mock TimerInternals mockTimerInternals;
 
@@ -83,9 +83,13 @@ public class SimpleDoFnRunnerTest {
             NullSideInputReader.empty(),
             null,
             null,
-            Collections.<TupleTag<?>>emptyList(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(new GlobalWindows()));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(new GlobalWindows()),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     thrown.expect(UserCodeException.class);
     thrown.expectCause(is(fn.exceptionToThrow));
@@ -103,18 +107,19 @@ public class SimpleDoFnRunnerTest {
             NullSideInputReader.empty(),
             null,
             null,
-            Collections.<TupleTag<?>>emptyList(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(new GlobalWindows()));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(new GlobalWindows()),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     thrown.expect(UserCodeException.class);
     thrown.expectCause(is(fn.exceptionToThrow));
 
     runner.onTimer(
-        ThrowingDoFn.TIMER_ID,
-        GlobalWindow.INSTANCE,
-        new Instant(0),
-        TimeDomain.EVENT_TIME);
+        ThrowingDoFn.TIMER_ID, GlobalWindow.INSTANCE, new Instant(0), TimeDomain.EVENT_TIME);
   }
 
   /**
@@ -133,9 +138,13 @@ public class SimpleDoFnRunnerTest {
             NullSideInputReader.empty(),
             null,
             null,
-            Collections.<TupleTag<?>>emptyList(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(new GlobalWindows()));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(new GlobalWindows()),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     // Setting the timer needs the current time, as it is set relative
     Instant currentTime = new Instant(42);
@@ -161,9 +170,13 @@ public class SimpleDoFnRunnerTest {
             NullSideInputReader.empty(),
             null,
             null,
-            Collections.<TupleTag<?>>emptyList(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(new GlobalWindows()));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(new GlobalWindows()),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     thrown.expect(UserCodeException.class);
     thrown.expectCause(is(fn.exceptionToThrow));
@@ -181,9 +194,13 @@ public class SimpleDoFnRunnerTest {
             NullSideInputReader.empty(),
             null,
             null,
-            Collections.<TupleTag<?>>emptyList(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(new GlobalWindows()));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(new GlobalWindows()),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     thrown.expect(UserCodeException.class);
     thrown.expectCause(is(fn.exceptionToThrow));
@@ -191,10 +208,8 @@ public class SimpleDoFnRunnerTest {
     runner.finishBundle();
   }
 
-
   /**
-   * Tests that {@link SimpleDoFnRunner#onTimer} properly dispatches to the underlying
-   * {@link DoFn}.
+   * Tests that {@link SimpleDoFnRunner#onTimer} properly dispatches to the underlying {@link DoFn}.
    */
   @Test
   public void testOnTimerCalled() {
@@ -207,9 +222,13 @@ public class SimpleDoFnRunnerTest {
             NullSideInputReader.empty(),
             null,
             null,
-            Collections.<TupleTag<?>>emptyList(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(windowFn));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(windowFn),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     Instant currentTime = new Instant(42);
     Duration offset = Duration.millis(37);
@@ -245,10 +264,14 @@ public class SimpleDoFnRunnerTest {
             fn,
             NullSideInputReader.empty(),
             new ListOutputManager(),
-            new TupleTag<Duration>(),
-            Collections.<TupleTag<?>>emptyList(),
+            new TupleTag<>(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(new GlobalWindows()));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(new GlobalWindows()),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     runner.startBundle();
     // An element output at the current timestamp is fine.
@@ -269,8 +292,8 @@ public class SimpleDoFnRunnerTest {
 
   /**
    * Demonstrates that attempting to output an element before the timestamp of the current element
-   * plus the value of {@link DoFn#getAllowedTimestampSkew()} throws, but between that value and
-   * the current timestamp succeeds.
+   * plus the value of {@link DoFn#getAllowedTimestampSkew()} throws, but between that value and the
+   * current timestamp succeeds.
    */
   @Test
   public void testSkew() {
@@ -281,10 +304,14 @@ public class SimpleDoFnRunnerTest {
             fn,
             NullSideInputReader.empty(),
             new ListOutputManager(),
-            new TupleTag<Duration>(),
-            Collections.<TupleTag<?>>emptyList(),
+            new TupleTag<>(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(new GlobalWindows()));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(new GlobalWindows()),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     runner.startBundle();
     // Outputting between "now" and "now - allowed skew" succeeds.
@@ -306,8 +333,8 @@ public class SimpleDoFnRunnerTest {
 
   /**
    * Demonstrates that attempting to output an element with a timestamp before the current one
-   * always succeeds when {@link DoFn#getAllowedTimestampSkew()} is equal to
-   * {@link Long#MAX_VALUE} milliseconds.
+   * always succeeds when {@link DoFn#getAllowedTimestampSkew()} is equal to {@link Long#MAX_VALUE}
+   * milliseconds.
    */
   @Test
   public void testInfiniteSkew() {
@@ -318,10 +345,14 @@ public class SimpleDoFnRunnerTest {
             fn,
             NullSideInputReader.empty(),
             new ListOutputManager(),
-            new TupleTag<Duration>(),
-            Collections.<TupleTag<?>>emptyList(),
+            new TupleTag<>(),
+            Collections.emptyList(),
             mockStepContext,
-            WindowingStrategy.of(new GlobalWindows()));
+            null,
+            Collections.emptyMap(),
+            WindowingStrategy.of(new GlobalWindows()),
+            DoFnSchemaInformation.create(),
+            Collections.emptyMap());
 
     runner.startBundle();
     runner.processElement(
@@ -401,7 +432,6 @@ public class SimpleDoFnRunnerTest {
     }
   }
 
-
   /**
    * A {@link DoFn} that outputs elements with timestamp equal to the input timestamp minus the
    * input element.
@@ -426,6 +456,7 @@ public class SimpleDoFnRunnerTest {
 
   private static class ListOutputManager implements OutputManager {
     private ListMultimap<TupleTag<?>, WindowedValue<?>> outputs = ArrayListMultimap.create();
+
     @Override
     public <T> void output(TupleTag<T> tag, WindowedValue<T> output) {
       outputs.put(tag, output);

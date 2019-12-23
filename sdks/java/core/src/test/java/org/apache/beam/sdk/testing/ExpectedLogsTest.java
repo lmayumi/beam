@@ -24,11 +24,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.LogRecord;
+import org.hamcrest.TypeSafeMatcher;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.Description;
@@ -71,6 +72,29 @@ public class ExpectedLogsTest {
     String expected = generateRandomString();
     LOG.error(expected, new IOException("Fake Exception"));
     expectedLogs.verifyError(expected);
+  }
+
+  @Test
+  public void testVerifyLogRecords() throws Throwable {
+    String expected = generateRandomString();
+    LOG.error(expected);
+    LOG.error(expected);
+    expectedLogs.verifyLogRecords(
+        new TypeSafeMatcher<Iterable<LogRecord>>() {
+          @Override
+          protected boolean matchesSafely(Iterable<LogRecord> item) {
+            int count = 0;
+            for (LogRecord record : item) {
+              if (record.getMessage().contains(expected)) {
+                count += 1;
+              }
+            }
+            return count == 2;
+          }
+
+          @Override
+          public void describeTo(org.hamcrest.Description description) {}
+        });
   }
 
   @Test(expected = AssertionError.class)
@@ -126,21 +150,22 @@ public class ExpectedLogsTest {
     for (int i = 0; i < 100; i++) {
       final String expected = generateRandomString();
       expectedStrings.add(expected);
-      completionService.submit(new Callable<Void>() {
-        @Override
-        public Void call() throws Exception {
-          // Have all threads started and waiting to log at about the same moment.
-          sleepMillis(Math.max(1, scheduledLogTime
-              - TimeUnit.MILLISECONDS.convert(System.nanoTime(), TimeUnit.NANOSECONDS)));
-          LOG.trace(expected);
-          return null;
-        }
-      });
+      completionService.submit(
+          () -> {
+            // Have all threads started and waiting to log at about the same moment.
+            sleepMillis(
+                Math.max(
+                    1,
+                    scheduledLogTime
+                        - TimeUnit.MILLISECONDS.convert(System.nanoTime(), TimeUnit.NANOSECONDS)));
+            LOG.trace(expected);
+            return null;
+          });
     }
 
     // Wait for all the threads to complete.
     for (int i = 0; i < 100; i++) {
-      completionService.take();
+      completionService.take().get();
     }
 
     for (String expected : expectedStrings) {
@@ -157,17 +182,19 @@ public class ExpectedLogsTest {
     expectedLogs = ExpectedLogs.none(ExpectedLogsTest.class);
     final boolean[] evaluateRan = new boolean[1];
 
-    expectedLogs.apply(
-        new Statement() {
-          @Override
-          public void evaluate() throws Throwable {
-            evaluateRan[0] = true;
-            expectedLogs.verifyNotLogged(messageUnexpected);
-            LOG.info(messageExpected);
-            expectedLogs.verifyInfo(messageExpected);
-          }
-        },
-        Description.EMPTY).evaluate();
+    expectedLogs
+        .apply(
+            new Statement() {
+              @Override
+              public void evaluate() throws Throwable {
+                evaluateRan[0] = true;
+                expectedLogs.verifyNotLogged(messageUnexpected);
+                LOG.info(messageExpected);
+                expectedLogs.verifyInfo(messageExpected);
+              }
+            },
+            Description.EMPTY)
+        .evaluate();
     assertTrue(evaluateRan[0]);
     // Verify expectedLogs is cleared.
     expectedLogs.verifyNotLogged(messageExpected);

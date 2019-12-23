@@ -29,6 +29,7 @@ import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.splittabledofn.HasDefaultTracker;
 import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker;
+import org.apache.beam.sdk.transforms.splittabledofn.SplitResult;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
@@ -50,11 +51,16 @@ public class SplittableParDoTest {
     }
   }
 
-  private static class SomeRestrictionTracker implements RestrictionTracker<SomeRestriction> {
+  private static class SomeRestrictionTracker extends RestrictionTracker<SomeRestriction, Void> {
     private final SomeRestriction someRestriction;
 
     public SomeRestrictionTracker(SomeRestriction someRestriction) {
       this.someRestriction = someRestriction;
+    }
+
+    @Override
+    public boolean tryClaim(Void position) {
+      return false;
     }
 
     @Override
@@ -63,8 +69,8 @@ public class SplittableParDoTest {
     }
 
     @Override
-    public SomeRestriction checkpoint() {
-      return someRestriction;
+    public SplitResult<SomeRestriction> trySplit(double fractionOfRemainder) {
+      return SplitResult.of(null, someRestriction);
     }
 
     @Override
@@ -73,7 +79,8 @@ public class SplittableParDoTest {
 
   private static class BoundedFakeFn extends DoFn<Integer, String> {
     @ProcessElement
-    public void processElement(ProcessContext context, SomeRestrictionTracker tracker) {}
+    public void processElement(
+        ProcessContext context, RestrictionTracker<SomeRestriction, Void> tracker) {}
 
     @GetInitialRestriction
     public SomeRestriction getInitialRestriction(Integer element) {
@@ -84,7 +91,7 @@ public class SplittableParDoTest {
   private static class UnboundedFakeFn extends DoFn<Integer, String> {
     @ProcessElement
     public ProcessContinuation processElement(
-        ProcessContext context, SomeRestrictionTracker tracker) {
+        ProcessContext context, RestrictionTracker<SomeRestriction, Void> tracker) {
       return stop();
     }
 

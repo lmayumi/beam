@@ -15,29 +15,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.fn.harness;
 
 import com.google.auto.service.AutoService;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Multimap;
-import com.google.protobuf.InvalidProtocolBufferException;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import org.apache.beam.fn.harness.control.BundleSplitListener;
+import org.apache.beam.fn.harness.control.ProcessBundleHandler;
 import org.apache.beam.fn.harness.data.BeamFnDataClient;
-import org.apache.beam.fn.harness.fn.ThrowingConsumer;
-import org.apache.beam.fn.harness.fn.ThrowingRunnable;
+import org.apache.beam.fn.harness.data.PCollectionConsumerRegistry;
+import org.apache.beam.fn.harness.data.PTransformFunctionRegistry;
 import org.apache.beam.fn.harness.state.BeamFnStateClient;
 import org.apache.beam.model.pipeline.v1.RunnerApi;
+import org.apache.beam.model.pipeline.v1.RunnerApi.Coder;
+import org.apache.beam.model.pipeline.v1.RunnerApi.PCollection;
+import org.apache.beam.model.pipeline.v1.RunnerApi.PTransform;
+import org.apache.beam.model.pipeline.v1.RunnerApi.ReadPayload;
+import org.apache.beam.runners.core.construction.PTransformTranslation;
+import org.apache.beam.runners.core.construction.ReadTranslation;
+import org.apache.beam.sdk.fn.data.FnDataReceiver;
+import org.apache.beam.sdk.function.ThrowingRunnable;
 import org.apache.beam.sdk.io.BoundedSource;
 import org.apache.beam.sdk.io.Source.Reader;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.util.SerializableUtils;
 import org.apache.beam.sdk.util.WindowedValue;
+import org.apache.beam.vendor.grpc.v1p21p0.com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
 
 /**
  * A runner which creates {@link Reader}s for each {@link BoundedSource} sent as an input and
@@ -45,16 +53,15 @@ import org.apache.beam.sdk.util.WindowedValue;
  */
 public class BoundedSourceRunner<InputT extends BoundedSource<OutputT>, OutputT> {
 
-  private static final String URN = "urn:org.apache.beam:source:java:0.1";
-
   /** A registrar which provides a factory to handle Java {@link BoundedSource}s. */
   @AutoService(PTransformRunnerFactory.Registrar.class)
-  public static class Registrar implements
-      PTransformRunnerFactory.Registrar {
+  public static class Registrar implements PTransformRunnerFactory.Registrar {
 
     @Override
     public Map<String, PTransformRunnerFactory> getPTransformRunnerFactories() {
-      return ImmutableMap.of(URN, new Factory());
+      return ImmutableMap.of(
+          ProcessBundleHandler.JAVA_SOURCE_URN, new Factory(),
+          PTransformTranslation.READ_TRANSFORM_URN, new Factory());
     }
   }
 
@@ -67,34 +74,31 @@ public class BoundedSourceRunner<InputT extends BoundedSource<OutputT>, OutputT>
         BeamFnDataClient beamFnDataClient,
         BeamFnStateClient beamFnStateClient,
         String pTransformId,
-        RunnerApi.PTransform pTransform,
+        PTransform pTransform,
         Supplier<String> processBundleInstructionId,
-        Map<String, RunnerApi.PCollection> pCollections,
-        Map<String, RunnerApi.Coder> coders,
-        Multimap<String, ThrowingConsumer<WindowedValue<?>>> pCollectionIdsToConsumers,
-        Consumer<ThrowingRunnable> addStartFunction,
-        Consumer<ThrowingRunnable> addFinishFunction) {
-
-      ImmutableList.Builder<ThrowingConsumer<WindowedValue<?>>> consumers = ImmutableList.builder();
+        Map<String, PCollection> pCollections,
+        Map<String, Coder> coders,
+        Map<String, RunnerApi.WindowingStrategy> windowingStrategies,
+        PCollectionConsumerRegistry pCollectionConsumerRegistry,
+        PTransformFunctionRegistry startFunctionRegistry,
+        PTransformFunctionRegistry finishFunctionRegistry,
+        Consumer<ThrowingRunnable> tearDownFunctions,
+        BundleSplitListener splitListener) {
+      ImmutableList.Builder<FnDataReceiver<WindowedValue<?>>> consumers = ImmutableList.builder();
       for (String pCollectionId : pTransform.getOutputsMap().values()) {
-        consumers.addAll(pCollectionIdsToConsumers.get(pCollectionId));
+        consumers.add(pCollectionConsumerRegistry.getMultiplexingConsumer(pCollectionId));
       }
 
       @SuppressWarnings({"rawtypes", "unchecked"})
-      BoundedSourceRunner<InputT, OutputT> runner = new BoundedSourceRunner(
-          pipelineOptions,
-          pTransform.getSpec(),
-          consumers.build());
+      BoundedSourceRunner<InputT, OutputT> runner =
+          new BoundedSourceRunner(pipelineOptions, pTransform.getSpec(), consumers.build());
 
       // TODO: Remove and replace with source being sent across gRPC port
-      addStartFunction.accept(runner::start);
+      startFunctionRegistry.register(pTransformId, runner::start);
 
-      ThrowingConsumer runReadLoop =
-          (ThrowingConsumer<WindowedValue<InputT>>) runner::runReadLoop;
+      FnDataReceiver runReadLoop = (FnDataReceiver<WindowedValue<InputT>>) runner::runReadLoop;
       for (String pCollectionId : pTransform.getInputsMap().values()) {
-        pCollectionIdsToConsumers.put(
-            pCollectionId,
-            runReadLoop);
+        pCollectionConsumerRegistry.register(pCollectionId, pTransformId, runReadLoop);
       }
 
       return runner;
@@ -103,12 +107,12 @@ public class BoundedSourceRunner<InputT extends BoundedSource<OutputT>, OutputT>
 
   private final PipelineOptions pipelineOptions;
   private final RunnerApi.FunctionSpec definition;
-  private final Collection<ThrowingConsumer<WindowedValue<OutputT>>> consumers;
+  private final Collection<FnDataReceiver<WindowedValue<OutputT>>> consumers;
 
   BoundedSourceRunner(
       PipelineOptions pipelineOptions,
       RunnerApi.FunctionSpec definition,
-      Collection<ThrowingConsumer<WindowedValue<OutputT>>> consumers) {
+      Collection<FnDataReceiver<WindowedValue<OutputT>>> consumers) {
     this.pipelineOptions = pipelineOptions;
     this.definition = definition;
     this.consumers = consumers;
@@ -116,18 +120,27 @@ public class BoundedSourceRunner<InputT extends BoundedSource<OutputT>, OutputT>
 
   /**
    * @deprecated The runner harness is meant to send the source over the Beam Fn Data API which
-   * would be consumed by the {@link #runReadLoop}. Drop this method once the runner harness sends
-   * the source instead of unpacking it from the data block of the function specification.
+   *     would be consumed by the {@link #runReadLoop}. Drop this method once the runner harness
+   *     sends the source instead of unpacking it from the data block of the function specification.
    */
   @Deprecated
   public void start() throws Exception {
     try {
       // The representation here is defined as the java serialized representation of the
       // bounded source object in a ByteString wrapper.
-      byte[] bytes = definition.getPayload().toByteArray();
-      @SuppressWarnings("unchecked")
-      InputT boundedSource =
-          (InputT) SerializableUtils.deserializeFromByteArray(bytes, definition.toString());
+      InputT boundedSource;
+      if (definition.getUrn().equals(ProcessBundleHandler.JAVA_SOURCE_URN)) {
+        byte[] bytes = definition.getPayload().toByteArray();
+        @SuppressWarnings("unchecked")
+        InputT boundedSource0 =
+            (InputT) SerializableUtils.deserializeFromByteArray(bytes, definition.toString());
+        boundedSource = boundedSource0;
+      } else if (definition.getUrn().equals(PTransformTranslation.READ_TRANSFORM_URN)) {
+        ReadPayload readPayload = ReadPayload.parseFrom(definition.getPayload());
+        boundedSource = (InputT) ReadTranslation.boundedSourceFromProto(readPayload);
+      } else {
+        throw new IllegalArgumentException("Unknown source URN: " + definition.getUrn());
+      }
       runReadLoop(WindowedValue.valueInGlobalWindow(boundedSource));
     } catch (InvalidProtocolBufferException e) {
       throw new IOException(String.format("Failed to decode %s", definition.getUrn()), e);
@@ -135,11 +148,10 @@ public class BoundedSourceRunner<InputT extends BoundedSource<OutputT>, OutputT>
   }
 
   /**
-   * Creates a {@link Reader} for each {@link BoundedSource} and executes the {@link Reader}s
-   * read loop. See {@link Reader} for further details of the read loop.
+   * Creates a {@link Reader} for each {@link BoundedSource} and executes the {@link Reader}s read
+   * loop. See {@link Reader} for further details of the read loop.
    *
-   * <p>Propagates any exceptions caused during reading or processing via a consumer to the
-   * caller.
+   * <p>Propagates any exceptions caused during reading or processing via a consumer to the caller.
    */
   public void runReadLoop(WindowedValue<InputT> value) throws Exception {
     try (Reader<OutputT> reader = value.getValue().createReader(pipelineOptions)) {
@@ -149,9 +161,10 @@ public class BoundedSourceRunner<InputT extends BoundedSource<OutputT>, OutputT>
       }
       do {
         // TODO: Should this use the input window as the window for all the outputs?
-        WindowedValue<OutputT> nextValue = WindowedValue.timestampedValueInGlobalWindow(
-            reader.getCurrent(), reader.getCurrentTimestamp());
-        for (ThrowingConsumer<WindowedValue<OutputT>> consumer : consumers) {
+        WindowedValue<OutputT> nextValue =
+            WindowedValue.timestampedValueInGlobalWindow(
+                reader.getCurrent(), reader.getCurrentTimestamp());
+        for (FnDataReceiver<WindowedValue<OutputT>> consumer : consumers) {
           consumer.accept(nextValue);
         }
       } while (reader.advance());

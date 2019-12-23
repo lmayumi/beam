@@ -17,26 +17,26 @@
  */
 package org.apache.beam.sdk.extensions.sql.meta.provider.kafka;
 
+import static org.apache.beam.sdk.schemas.Schema.toSchema;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
-import com.google.common.collect.ImmutableList;
-import java.net.URI;
-import java.sql.Types;
-import org.apache.beam.sdk.extensions.sql.BeamSqlTable;
-import org.apache.beam.sdk.extensions.sql.meta.Column;
+import java.util.stream.Stream;
+import org.apache.beam.sdk.extensions.sql.meta.BeamSqlTable;
 import org.apache.beam.sdk.extensions.sql.meta.Table;
+import org.apache.beam.sdk.schemas.Schema;
+import org.apache.beam.vendor.calcite.v1_20_0.com.google.common.collect.ImmutableList;
 import org.junit.Test;
 
-/**
- * UnitTest for {@link KafkaTableProvider}.
- */
+/** UnitTest for {@link KafkaTableProvider}. */
 public class KafkaTableProviderTest {
   private KafkaTableProvider provider = new KafkaTableProvider();
-  @Test public void testBuildBeamSqlTable() throws Exception {
+
+  @Test
+  public void testBuildBeamSqlTable() throws Exception {
     Table table = mockTable("hello");
     BeamSqlTable sqlTable = provider.buildBeamSqlTable(table);
 
@@ -64,11 +64,12 @@ public class KafkaTableProviderTest {
     return Table.builder()
         .name(name)
         .comment(name + " table")
-        .location(URI.create("kafka://localhost:2181/brokers?topic=test"))
-        .columns(ImmutableList.of(
-            Column.builder().name("id").type(Types.INTEGER).primaryKey(true).build(),
-            Column.builder().name("name").type(Types.VARCHAR).primaryKey(false).build()
-        ))
+        .location("kafka://localhost:2181/brokers?topic=test")
+        .schema(
+            Stream.of(
+                    Schema.Field.nullable("id", Schema.FieldType.INT32),
+                    Schema.Field.nullable("name", Schema.FieldType.STRING))
+                .collect(toSchema()))
         .type("kafka")
         .properties(properties)
         .build();

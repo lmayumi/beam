@@ -17,6 +17,8 @@
 
 """Test for the mergecontacts example."""
 
+from __future__ import absolute_import
+
 import logging
 import tempfile
 import unittest
@@ -85,7 +87,7 @@ class MergeContactsTest(unittest.TestCase):
 
   def create_temp_file(self, contents):
     with tempfile.NamedTemporaryFile(delete=False) as f:
-      f.write(contents)
+      f.write(contents.encode('utf-8'))
       return f.name
 
   def normalize_tsv_results(self, tsv_data):
@@ -108,12 +110,14 @@ class MergeContactsTest(unittest.TestCase):
 
     result_prefix = self.create_temp_file('')
 
-    mergecontacts.run([
-        '--input_email=%s' % path_email,
-        '--input_phone=%s' % path_phone,
-        '--input_snailmail=%s' % path_snailmail,
-        '--output_tsv=%s.tsv' % result_prefix,
-        '--output_stats=%s.stats' % result_prefix], assert_results=(2, 1, 3))
+    mergecontacts.run(
+        ['--input_email=%s' % path_email,
+         '--input_phone=%s' % path_phone,
+         '--input_snailmail=%s' % path_snailmail,
+         '--output_tsv=%s.tsv' % result_prefix,
+         '--output_stats=%s.stats' % result_prefix],
+        assert_results=(2, 1, 3),
+        save_main_session=False)
 
     with open_shards('%s.tsv-*-of-*' % result_prefix) as f:
       contents = f.read()

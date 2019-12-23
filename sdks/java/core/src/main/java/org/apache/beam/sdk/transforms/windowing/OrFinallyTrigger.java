@@ -17,9 +17,9 @@
  */
 package org.apache.beam.sdk.transforms.windowing;
 
-import com.google.common.annotations.VisibleForTesting;
 import java.util.Arrays;
 import java.util.List;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
 import org.joda.time.Instant;
 
 /**
@@ -33,21 +33,20 @@ public class OrFinallyTrigger extends Trigger {
   private static final int ACTUAL = 0;
   private static final int UNTIL = 1;
 
-  @VisibleForTesting OrFinallyTrigger(Trigger actual, Trigger.OnceTrigger until) {
+  @VisibleForTesting
+  OrFinallyTrigger(Trigger actual, Trigger.OnceTrigger until) {
     super(Arrays.asList(actual, until));
   }
 
   /**
-   * The main trigger, which will continue firing until the "until" trigger fires. See
-   * {@link #getUntilTrigger()}
+   * The main trigger, which will continue firing until the "until" trigger fires. See {@link
+   * #getUntilTrigger()}
    */
   public Trigger getMainTrigger() {
     return subTriggers().get(ACTUAL);
   }
 
-  /**
-   * The trigger that signals termination of this trigger.
-   */
+  /** The trigger that signals termination of this trigger. */
   public OnceTrigger getUntilTrigger() {
     return (OnceTrigger) subTriggers().get(UNTIL);
   }
@@ -58,6 +57,11 @@ public class OrFinallyTrigger extends Trigger {
     Instant actualDeadline = subTriggers.get(ACTUAL).getWatermarkThatGuaranteesFiring(window);
     Instant untilDeadline = subTriggers.get(UNTIL).getWatermarkThatGuaranteesFiring(window);
     return actualDeadline.isBefore(untilDeadline) ? actualDeadline : untilDeadline;
+  }
+
+  @Override
+  public boolean mayFinish() {
+    return subTriggers.get(ACTUAL).mayFinish() || subTriggers.get(UNTIL).mayFinish();
   }
 
   @Override

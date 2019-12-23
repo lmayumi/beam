@@ -21,18 +21,26 @@ import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.internal.matchers.ThrowableMessageMatcher.hasMessage;
+import static org.powermock.api.mockito.PowerMockito.mockStatic;
+import static org.powermock.api.mockito.PowerMockito.when;
 
+import java.io.IOException;
+import java.util.List;
+import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions.DefaultGcpRegionFactory;
 import org.apache.beam.sdk.extensions.gcp.storage.NoopPathValidator;
 import org.apache.beam.sdk.io.FileSystems;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.testing.ResetDateTimeProvider;
 import org.apache.beam.sdk.testing.RestoreSystemProperties;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Splitter;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.powermock.core.classloader.annotations.PrepareForTest;
+import org.powermock.modules.junit4.PowerMockRunner;
 
 /** Tests for {@link DataflowPipelineOptions}. */
 @RunWith(JUnit4.class)
@@ -54,13 +62,13 @@ public class DataflowPipelineOptionsTest {
     System.getProperties().remove("user.name");
     DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
     options.setAppName("TestApplication");
-    String[] nameComponents = options.getJobName().split("-");
-    assertEquals(4, nameComponents.length);
-    assertEquals("testapplication", nameComponents[0]);
-    assertEquals("", nameComponents[1]);
-    assertEquals("1208190706", nameComponents[2]);
+    List<String> nameComponents = Splitter.on('-').splitToList(options.getJobName());
+    assertEquals(4, nameComponents.size());
+    assertEquals("testapplication", nameComponents.get(0));
+    assertEquals("", nameComponents.get(1));
+    assertEquals("1208190706", nameComponents.get(2));
     // Verify the last component is a hex integer (unsigned).
-    Long.parseLong(nameComponents[3], 16);
+    Long.parseLong(nameComponents.get(3), 16);
     assertTrue(options.getJobName().length() <= 40);
   }
 
@@ -70,13 +78,13 @@ public class DataflowPipelineOptionsTest {
     System.getProperties().put("user.name", "abcdeabcdeabcdeabcdeabcdeabcde");
     DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
     options.setAppName("1234567890123456789012345678901234567890");
-    String[] nameComponents = options.getJobName().split("-");
-    assertEquals(4, nameComponents.length);
-    assertEquals("a234567890123456789012345678901234567890", nameComponents[0]);
-    assertEquals("abcdeabcdeabcdeabcdeabcdeabcde", nameComponents[1]);
-    assertEquals("1208190706", nameComponents[2]);
+    List<String> nameComponents = Splitter.on('-').splitToList(options.getJobName());
+    assertEquals(4, nameComponents.size());
+    assertEquals("a234567890123456789012345678901234567890", nameComponents.get(0));
+    assertEquals("abcdeabcdeabcdeabcdeabcdeabcde", nameComponents.get(1));
+    assertEquals("1208190706", nameComponents.get(2));
     // Verify the last component is a hex integer (unsigned).
-    Long.parseLong(nameComponents[3], 16);
+    Long.parseLong(nameComponents.get(3), 16);
   }
 
   @Test
@@ -85,13 +93,13 @@ public class DataflowPipelineOptionsTest {
     System.getProperties().put("user.name", "abcde");
     DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
     options.setAppName("1234567890123456789012345678901234567890");
-    String[] nameComponents = options.getJobName().split("-");
-    assertEquals(4, nameComponents.length);
-    assertEquals("a234567890123456789012345678901234567890", nameComponents[0]);
-    assertEquals("abcde", nameComponents[1]);
-    assertEquals("1208190706", nameComponents[2]);
+    List<String> nameComponents = Splitter.on('-').splitToList(options.getJobName());
+    assertEquals(4, nameComponents.size());
+    assertEquals("a234567890123456789012345678901234567890", nameComponents.get(0));
+    assertEquals("abcde", nameComponents.get(1));
+    assertEquals("1208190706", nameComponents.get(2));
     // Verify the last component is a hex integer (unsigned).
-    Long.parseLong(nameComponents[3], 16);
+    Long.parseLong(nameComponents.get(3), 16);
   }
 
   @Test
@@ -100,13 +108,13 @@ public class DataflowPipelineOptionsTest {
     System.getProperties().put("user.name", "abcdeabcdeabcdeabcdeabcdeabcde");
     DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
     options.setAppName("1234567890");
-    String[] nameComponents = options.getJobName().split("-");
-    assertEquals(4, nameComponents.length);
-    assertEquals("a234567890", nameComponents[0]);
-    assertEquals("abcdeabcdeabcdeabcdeabcdeabcde", nameComponents[1]);
-    assertEquals("1208190706", nameComponents[2]);
+    List<String> nameComponents = Splitter.on('-').splitToList(options.getJobName());
+    assertEquals(4, nameComponents.size());
+    assertEquals("a234567890", nameComponents.get(0));
+    assertEquals("abcdeabcdeabcdeabcdeabcdeabcde", nameComponents.get(1));
+    assertEquals("1208190706", nameComponents.get(2));
     // Verify the last component is a hex integer (unsigned).
-    Long.parseLong(nameComponents[3], 16);
+    Long.parseLong(nameComponents.get(3), 16);
   }
 
   @Test
@@ -115,13 +123,13 @@ public class DataflowPipelineOptionsTest {
     System.getProperties().put("user.name", "ði ıntəˈnæʃənəl ");
     DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
     options.setAppName("fəˈnɛtık əsoʊsiˈeıʃn");
-    String[] nameComponents = options.getJobName().split("-");
-    assertEquals(4, nameComponents.length);
-    assertEquals("f00n0t0k00so0si0e00n", nameComponents[0]);
-    assertEquals("0i00nt00n000n0l0", nameComponents[1]);
-    assertEquals("1208190706", nameComponents[2]);
+    List<String> nameComponents = Splitter.on('-').splitToList(options.getJobName());
+    assertEquals(4, nameComponents.size());
+    assertEquals("f00n0t0k00so0si0e00n", nameComponents.get(0));
+    assertEquals("0i00nt00n000n0l0", nameComponents.get(1));
+    assertEquals("1208190706", nameComponents.get(2));
     // Verify the last component is a hex integer (unsigned).
-    Long.parseLong(nameComponents[3], 16);
+    Long.parseLong(nameComponents.get(3), 16);
   }
 
   @Test
@@ -155,14 +163,25 @@ public class DataflowPipelineOptionsTest {
   }
 
   @Test
+  public void testDefaultFlexRSGoal() {
+    DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
+    assertEquals(
+        DataflowPipelineOptions.FlexResourceSchedulingGoal.UNSPECIFIED, options.getFlexRSGoal());
+    options.setFlexRSGoal(DataflowPipelineOptions.FlexResourceSchedulingGoal.COST_OPTIMIZED);
+    assertEquals(
+        DataflowPipelineOptions.FlexResourceSchedulingGoal.COST_OPTIMIZED, options.getFlexRSGoal());
+  }
+
+  @Test
   public void testDefaultNoneGcsTempLocation() {
     DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
     options.setTempLocation("file://temp_location");
     thrown.expect(IllegalArgumentException.class);
-    thrown.expectMessage("Error constructing default value for stagingLocation: "
-        + "failed to retrieve gcpTempLocation.");
-    thrown.expectCause(hasMessage(containsString(
-        "Error constructing default value for gcpTempLocation")));
+    thrown.expectMessage(
+        "Error constructing default value for stagingLocation: "
+            + "failed to retrieve gcpTempLocation.");
+    thrown.expectCause(
+        hasMessage(containsString("Error constructing default value for gcpTempLocation")));
     options.getStagingLocation();
   }
 
@@ -173,9 +192,8 @@ public class DataflowPipelineOptionsTest {
     thrown.expect(IllegalArgumentException.class);
     thrown.expectMessage(
         "Error constructing default value for stagingLocation: gcpTempLocation is not"
-        + " a valid GCS path");
-    thrown.expectCause(
-        hasMessage(containsString("Expected a valid 'gs://' path")));
+            + " a valid GCS path");
+    thrown.expectCause(hasMessage(containsString("Expected a valid 'gs://' path")));
     options.getStagingLocation();
   }
 
@@ -186,5 +204,45 @@ public class DataflowPipelineOptionsTest {
     thrown.expect(IllegalArgumentException.class);
     thrown.expectMessage("Error constructing default value for stagingLocation");
     options.getStagingLocation();
+  }
+
+  @RunWith(PowerMockRunner.class)
+  @PrepareForTest(DefaultGcpRegionFactory.class)
+  public static class DefaultGcpRegionFactoryTest {
+    @Test
+    public void testDefaultGcpRegionUnset() throws IOException, InterruptedException {
+      mockStatic(DefaultGcpRegionFactory.class);
+      when(DefaultGcpRegionFactory.getRegionFromEnvironment()).thenReturn(null);
+      when(DefaultGcpRegionFactory.getRegionFromGcloudCli()).thenReturn("");
+      DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
+      assertEquals("us-central1", options.getRegion());
+    }
+
+    @Test
+    public void testDefaultGcpRegionUnsetIgnoresGcloudException()
+        throws IOException, InterruptedException {
+      mockStatic(DefaultGcpRegionFactory.class);
+      when(DefaultGcpRegionFactory.getRegionFromEnvironment()).thenReturn(null);
+      when(DefaultGcpRegionFactory.getRegionFromGcloudCli()).thenThrow(new IOException());
+      DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
+      assertEquals("us-central1", options.getRegion());
+    }
+
+    @Test
+    public void testDefaultGcpRegionFromEnvironment() {
+      mockStatic(DefaultGcpRegionFactory.class);
+      when(DefaultGcpRegionFactory.getRegionFromEnvironment()).thenReturn("us-west1");
+      DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
+      assertEquals("us-west1", options.getRegion());
+    }
+
+    @Test
+    public void testDefaultGcpRegionFromGcloud() throws IOException, InterruptedException {
+      mockStatic(DefaultGcpRegionFactory.class);
+      when(DefaultGcpRegionFactory.getRegionFromEnvironment()).thenReturn(null);
+      when(DefaultGcpRegionFactory.getRegionFromGcloudCli()).thenReturn("us-west1");
+      DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
+      assertEquals("us-west1", options.getRegion());
+    }
   }
 }

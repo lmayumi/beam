@@ -20,7 +20,7 @@ package org.apache.beam.sdk.extensions.protobuf;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 
-import com.google.common.collect.ImmutableList;
+import java.io.ObjectStreamClass;
 import java.util.Collections;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
@@ -34,15 +34,14 @@ import org.apache.beam.sdk.extensions.protobuf.Proto2CoderTestMessages.MessageWi
 import org.apache.beam.sdk.testing.CoderProperties;
 import org.apache.beam.sdk.util.CoderUtils;
 import org.apache.beam.sdk.values.TypeDescriptor;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@link ProtoCoder}.
- */
+/** Tests for {@link ProtoCoder}. */
 @RunWith(JUnit4.class)
 public class ProtoCoderTest {
 
@@ -54,8 +53,8 @@ public class ProtoCoderTest {
 
     assertEquals(
         ProtoCoder.of(new TypeDescriptor<MessageA>() {}),
-        ProtoCoder.getCoderProvider().coderFor(
-            new TypeDescriptor<MessageA>() {}, Collections.<Coder<?>>emptyList()));
+        ProtoCoder.getCoderProvider()
+            .coderFor(new TypeDescriptor<MessageA>() {}, Collections.emptyList()));
   }
 
   @Test
@@ -63,8 +62,8 @@ public class ProtoCoderTest {
     thrown.expect(CannotProvideCoderException.class);
     thrown.expectMessage("java.lang.Integer is not a subclass of com.google.protobuf.Message");
 
-    ProtoCoder.getCoderProvider().coderFor(
-        new TypeDescriptor<Integer>() {}, Collections.<Coder<?>>emptyList());
+    ProtoCoder.getCoderProvider()
+        .coderFor(new TypeDescriptor<Integer>() {}, Collections.emptyList());
   }
 
   @Test
@@ -168,5 +167,11 @@ public class ProtoCoderTest {
     // Assert the encoded messages are not equal.
     Coder<MessageWithMap> coder = ProtoCoder.of(MessageWithMap.class);
     assertNotEquals(CoderUtils.encodeToBase64(coder, msg2), CoderUtils.encodeToBase64(coder, msg1));
+  }
+
+  @Test
+  public void testSerialVersionID() {
+    long serialVersionID = ObjectStreamClass.lookup(ProtoCoder.class).getSerialVersionUID();
+    assertEquals(-5043999806040629525L, serialVersionID);
   }
 }

@@ -17,6 +17,8 @@
 
 """Test Pipeline, a wrapper of Pipeline for test purpose"""
 
+from __future__ import absolute_import
+
 import argparse
 import shlex
 
@@ -65,7 +67,8 @@ class TestPipeline(Pipeline):
                options=None,
                argv=None,
                is_integration_test=False,
-               blocking=True):
+               blocking=True,
+               additional_pipeline_args=None):
     """Initialize a pipeline object for test.
 
     Args:
@@ -86,25 +89,36 @@ class TestPipeline(Pipeline):
         test, :data:`False` otherwise.
       blocking (bool): Run method will wait until pipeline execution is
         completed.
+      additional_pipeline_args (List[str]): additional pipeline arguments to be
+        included when construction the pipeline options object.
 
     Raises:
       ~exceptions.ValueError: if either the runner or options argument is not
         of the expected type.
     """
     self.is_integration_test = is_integration_test
-    self.options_list = self._parse_test_option_args(argv)
+    self.not_use_test_runner_api = False
+    additional_pipeline_args = additional_pipeline_args or []
+    self.options_list = (
+        self._parse_test_option_args(argv) + additional_pipeline_args)
     self.blocking = blocking
     if options is None:
       options = PipelineOptions(self.options_list)
     super(TestPipeline, self).__init__(runner, options)
 
-  def run(self):
-    result = super(TestPipeline, self).run()
+  def run(self, test_runner_api=True):
+    result = super(TestPipeline, self).run(
+        test_runner_api=(False if self.not_use_test_runner_api
+                         else test_runner_api))
     if self.blocking:
       state = result.wait_until_finish()
-      assert state == PipelineState.DONE, "Pipeline execution failed."
+      assert state in (PipelineState.DONE, PipelineState.CANCELLED), \
+          "Pipeline execution failed."
 
     return result
+
+  def get_pipeline_options(self):
+    return self._options
 
   def _parse_test_option_args(self, argv):
     """Parse value of command line argument: --test-pipeline-options to get
@@ -123,6 +137,10 @@ class TestPipeline(Pipeline):
                         type=str,
                         action='store',
                         help='only run tests providing service options')
+    parser.add_argument('--not-use-test-runner-api',
+                        action='store_true',
+                        default=False,
+                        help='whether not to use test-runner-api')
     known, unused_argv = parser.parse_known_args(argv)
 
     if self.is_integration_test and not known.test_pipeline_options:
@@ -132,6 +150,7 @@ class TestPipeline(Pipeline):
       raise SkipTest('IT is skipped because --test-pipeline-options '
                      'is not specified')
 
+    self.not_use_test_runner_api = known.not_use_test_runner_api
     return shlex.split(known.test_pipeline_options) \
       if known.test_pipeline_options else []
 
@@ -149,7 +168,7 @@ class TestPipeline(Pipeline):
       elif isinstance(v, bool) and v:
         options.append('--%s' % k)
       elif 'matcher' in k:
-        options.append('--%s=%s' % (k, pickler.dumps(v)))
+        options.append('--%s=%s' % (k, pickler.dumps(v).decode()))
       else:
         options.append('--%s=%s' % (k, v))
     return options

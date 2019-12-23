@@ -51,11 +51,9 @@ import org.mockito.MockitoAnnotations;
 /** Tests for {@link GroupByKey} for the {@link DataflowRunner}. */
 @RunWith(JUnit4.class)
 public class DataflowGroupByKeyTest {
-  @Rule
-  public ExpectedException thrown = ExpectedException.none();
+  @Rule public ExpectedException thrown = ExpectedException.none();
 
-  @Mock
-  private Dataflow dataflow;
+  @Mock private Dataflow dataflow;
 
   @Before
   public void setUp() {
@@ -63,9 +61,8 @@ public class DataflowGroupByKeyTest {
   }
 
   /**
-   * Create a test pipeline that uses the {@link DataflowRunner} so that {@link GroupByKey}
-   * is not expanded. This is used for verifying that even without expansion the proper errors show
-   * up.
+   * Create a test pipeline that uses the {@link DataflowRunner} so that {@link GroupByKey} is not
+   * expanded. This is used for verifying that even without expansion the proper errors show up.
    */
   private Pipeline createTestServiceRunner() {
     DataflowPipelineOptions options = PipelineOptionsFactory.as(DataflowPipelineOptions.class);
@@ -84,16 +81,14 @@ public class DataflowGroupByKeyTest {
     List<KV<String, Integer>> ungroupedPairs = Arrays.asList();
 
     PCollection<KV<String, Integer>> input =
-        p.apply(Create.of(ungroupedPairs)
-            .withCoder(KvCoder.of(StringUtf8Coder.of(), BigEndianIntegerCoder.of())))
-        .apply(Window.<KV<String, Integer>>into(
-            Sessions.withGapDuration(Duration.standardMinutes(1))));
+        p.apply(
+                Create.of(ungroupedPairs)
+                    .withCoder(KvCoder.of(StringUtf8Coder.of(), BigEndianIntegerCoder.of())))
+            .apply(Window.into(Sessions.withGapDuration(Duration.standardMinutes(1))));
 
     thrown.expect(IllegalStateException.class);
     thrown.expectMessage("GroupByKey must have a valid Window merge function");
-    input
-        .apply("GroupByKey", GroupByKey.<String, Integer>create())
-        .apply("GroupByKeyAgain", GroupByKey.<String, Iterable<Integer>>create());
+    input.apply("GroupByKey", GroupByKey.create()).apply("GroupByKeyAgain", GroupByKey.create());
   }
 
   @Test
@@ -116,8 +111,8 @@ public class DataflowGroupByKeyTest {
     thrown.expect(IllegalStateException.class);
     thrown.expectMessage(
         "GroupByKey cannot be applied to non-bounded PCollection in the GlobalWindow without "
-        + "a trigger. Use a Window.into or Window.triggering transform prior to GroupByKey.");
+            + "a trigger. Use a Window.into or Window.triggering transform prior to GroupByKey.");
 
-    input.apply("GroupByKey", GroupByKey.<String, Integer>create());
+    input.apply("GroupByKey", GroupByKey.create());
   }
 }

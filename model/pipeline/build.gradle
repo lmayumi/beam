@@ -16,19 +16,19 @@
  * limitations under the License.
  */
 
-apply from: project(":").file("build_rules.gradle")
-applyJavaNature(enableFindbugs: false)
-applyGrpcNature()
+plugins { id 'org.apache.beam.module' }
+applyPortabilityNature(
+    automaticModuleName: 'org.apache.beam.model.pipeline',
+    shadowJarValidationExcludes: ["org/apache/beam/model/pipeline/v1/**"]
+)
 
 description = "Apache Beam :: Model :: Pipeline"
+ext.summary = "Portable definitions for building pipelines"
 
-dependencies {
-  shadow library.java.protobuf_java
+configurations {
+    unshaded
 }
 
-task packageTests(type: Jar) {
-  from sourceSets.test.output
-  classifier = "tests"
+artifacts {
+    unshaded jar
 }
-
-artifacts.archives packageTests

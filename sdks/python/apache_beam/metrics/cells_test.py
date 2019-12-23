@@ -15,13 +15,17 @@
 # limitations under the License.
 #
 
+from __future__ import absolute_import
+
 import threading
 import unittest
+from builtins import range
 
-from apache_beam.metrics.cells import CellCommitState
 from apache_beam.metrics.cells import CounterCell
 from apache_beam.metrics.cells import DistributionCell
 from apache_beam.metrics.cells import DistributionData
+from apache_beam.metrics.cells import GaugeCell
+from apache_beam.metrics.cells import GaugeData
 
 
 class TestCounterCell(unittest.TestCase):
@@ -46,7 +50,9 @@ class TestCounterCell(unittest.TestCase):
     for t in threads:
       t.join()
 
-    total = (self.NUM_ITERATIONS * (self.NUM_ITERATIONS-1)/2 * self.NUM_THREADS)
+    total = (self.NUM_ITERATIONS
+             * (self.NUM_ITERATIONS - 1) // 2
+             * self.NUM_THREADS)
     self.assertEqual(c.get_cumulative(), total)
 
   def test_basic_operations(self):
@@ -86,7 +92,9 @@ class TestDistributionCell(unittest.TestCase):
     for t in threads:
       t.join()
 
-    total = (self.NUM_ITERATIONS * (self.NUM_ITERATIONS-1)/2 * self.NUM_THREADS)
+    total = (self.NUM_ITERATIONS
+             * (self.NUM_ITERATIONS - 1) // 2
+             * self.NUM_THREADS)
 
     count = (self.NUM_ITERATIONS * self.NUM_THREADS)
 
@@ -117,26 +125,31 @@ class TestDistributionCell(unittest.TestCase):
                      DistributionData(9, 3, 3, 3))
 
 
-class TestCellCommitState(unittest.TestCase):
-  def test_basic_path(self):
-    ds = CellCommitState()
-    # Starts dirty
-    self.assertTrue(ds.before_commit())
-    ds.after_commit()
-    self.assertFalse(ds.before_commit())
+class TestGaugeCell(unittest.TestCase):
+  def test_basic_operations(self):
+    g = GaugeCell()
+    g.set(10)
+    self.assertEqual(g.get_cumulative().value, GaugeData(10).value)
 
-    # Make it dirty again
-    ds.after_modification()
-    self.assertTrue(ds.before_commit())
-    ds.after_commit()
-    self.assertFalse(ds.before_commit())
+    g.set(2)
+    self.assertEqual(g.get_cumulative().value, 2)
 
-    # Dirty again
-    ds.after_modification()
-    self.assertTrue(ds.before_commit())
-    ds.after_modification()
-    ds.after_commit()
-    self.assertTrue(ds.before_commit())
+  def test_integer_only(self):
+    g = GaugeCell()
+    g.set(3.3)
+    self.assertEqual(g.get_cumulative().value, 3)
+
+  def test_combine_appropriately(self):
+    g1 = GaugeCell()
+    g1.set(3)
+
+    g2 = GaugeCell()
+    g2.set(1)
+
+    # THe second Gauge, with value 1 was the most recent, so it should be
+    # the final result.
+    result = g2.combine(g1)
+    self.assertEqual(result.data.value, 1)
 
 
 if __name__ == '__main__':

@@ -29,6 +29,7 @@ option go_package = "fnexecution_v1";
 option java_package = "org.apache.beam.model.fnexecution.v1";
 option java_outer_classname = "ProvisionApi";
 
+import "endpoints.proto";
 import "google/protobuf/struct.proto";
 
 // A service to provide runtime provisioning information to the SDK harness
@@ -54,6 +55,11 @@ message ProvisionInfo {
     string job_id = 1;
     // (required) The job name.
     string job_name = 2;
+    // (required) The worker ID. Often this will be the hostname.
+    //
+    // This is independent of the id passed to the SDK harness via the 'id'
+    // argument in the Beam container contract.
+    string worker_id = 5;
 
     // (required) Pipeline options. For non-template jobs, the options are
     // identical to what is passed to job submission.
@@ -62,6 +68,16 @@ message ProvisionInfo {
     // (optional) Resource limits that the SDK harness worker should respect.
     // Runners may -- but are not required to -- enforce any limits provided.
     Resources resource_limits = 4;
+
+    // (required) The artifact retrieval token produced by
+    // ArtifactStagingService.CommitManifestResponse.
+    string retrieval_token = 6;
+
+    // (optional) The endpoint that the runner is hosting for the SDK to submit
+    // status reports to during pipeline execution. This field will only be
+    // populated if the runner supports SDK status reports. For more details see
+    // https://s.apache.org/beam-fn-api-harness-status
+    org.apache.beam.model.pipeline.v1.ApiServiceDescriptor status_endpoint = 7;
 }
 
 // Resources specify limits for local resources, such memory and cpu. It

@@ -48,7 +48,7 @@ The PubSub topic you specify should be the same topic to which the Injector is
 publishing.
 
 To run the Java injector:
-<beam_root>/examples/java8$ mvn compile exec:java \
+<beam_root>/examples/java$ mvn compile exec:java \
     -Dexec.mainClass=org.apache.beam.examples.complete.game.injector.Injector \
     -Dexec.args="$PROJECT_ID $PUBSUB_TOPIC none"
 
@@ -76,15 +76,10 @@ python leader_board.py \
     --dataset $BIGQUERY_DATASET \
     --runner DataflowRunner \
     --temp_location gs://$BUCKET/user_score/temp
-
---------------------------------------------------------------------------------
-NOTE [BEAM-2354]: This example is not yet runnable by DataflowRunner.
-    The runner still needs support for:
-      * the --save_main_session flag when streaming is enabled
---------------------------------------------------------------------------------
 """
 
 from __future__ import absolute_import
+from __future__ import division
 from __future__ import print_function
 
 import argparse
@@ -120,7 +115,9 @@ class ParseGameEventFn(beam.DoFn):
   The human-readable time string is not used here.
   """
   def __init__(self):
-    super(ParseGameEventFn, self).__init__()
+    # TODO(BEAM-6158): Revert the workaround once we can pickle super() on py3.
+    # super(ParseGameEventFn, self).__init__()
+    beam.DoFn.__init__(self)
     self.num_parse_errors = Metrics.counter(self.__class__, 'num_parse_errors')
 
   def process(self, elem):
@@ -144,7 +141,9 @@ class ExtractAndSumScore(beam.PTransform):
   extracted.
   """
   def __init__(self, field):
-    super(ExtractAndSumScore, self).__init__()
+    # TODO(BEAM-6158): Revert the workaround once we can pickle super() on py3.
+    # super(ExtractAndSumScore, self).__init__()
+    beam.PTransform.__init__(self)
     self.field = field
 
   def expand(self, pcoll):
@@ -173,39 +172,34 @@ class TeamScoresDict(beam.DoFn):
 
 class WriteToBigQuery(beam.PTransform):
   """Generate, format, and write BigQuery table row information."""
-  def __init__(self, table_name, dataset, schema):
+  def __init__(self, table_name, dataset, schema, project):
     """Initializes the transform.
     Args:
       table_name: Name of the BigQuery table to use.
       dataset: Name of the dataset to use.
       schema: Dictionary in the format {'column_name': 'bigquery_type'}
+      project: Name of the Cloud project containing BigQuery table.
     """
-    super(WriteToBigQuery, self).__init__()
+    # TODO(BEAM-6158): Revert the workaround once we can pickle super() on py3.
+    # super(WriteToBigQuery, self).__init__()
+    beam.PTransform.__init__(self)
     self.table_name = table_name
     self.dataset = dataset
     self.schema = schema
+    self.project = project
 
   def get_schema(self):
     """Build the output table schema."""
     return ', '.join(
         '%s:%s' % (col, self.schema[col]) for col in self.schema)
 
-  def get_table(self, pipeline):
-    """Utility to construct an output table reference."""
-    project = pipeline.options.view_as(GoogleCloudOptions).project
-    return '%s:%s.%s' % (project, self.dataset, self.table_name)
-
   def expand(self, pcoll):
-    table = self.get_table(pcoll.pipeline)
     return (
         pcoll
         | 'ConvertToRow' >> beam.Map(
             lambda elem: {col: elem[col] for col in self.schema})
-        | beam.io.Write(beam.io.BigQuerySink(
-            table,
-            schema=self.get_schema(),
-            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND)))
+        | beam.io.WriteToBigQuery(
+            self.table_name, self.dataset, self.project, self.get_schema()))
 
 
 # [START window_and_trigger]
@@ -216,7 +210,9 @@ class CalculateTeamScores(beam.PTransform):
   default.
   """
   def __init__(self, team_window_duration, allowed_lateness):
-    super(CalculateTeamScores, self).__init__()
+    # TODO(BEAM-6158): Revert the workaround once we can pickle super() on py3.
+    # super(CalculateTeamScores, self).__init__()
+    beam.PTransform.__init__(self)
     self.team_window_duration = team_window_duration * 60
     self.allowed_lateness_seconds = allowed_lateness * 60
 
@@ -244,7 +240,9 @@ class CalculateUserScores(beam.PTransform):
   global windowing. Get periodic updates on all users' running scores.
   """
   def __init__(self, allowed_lateness):
-    super(CalculateUserScores, self).__init__()
+    # TODO(BEAM-6158): Revert the workaround once we can pickle super() on py3.
+    # super(CalculateUserScores, self).__init__()
+    beam.PTransform.__init__(self)
     self.allowed_lateness_seconds = allowed_lateness * 60
 
   def expand(self, pcoll):
@@ -263,14 +261,16 @@ class CalculateUserScores(beam.PTransform):
 # [END processing_time_trigger]
 
 
-def run(argv=None):
+def run(argv=None, save_main_session=True):
   """Main entry point; defines and runs the hourly_team_score pipeline."""
   parser = argparse.ArgumentParser()
 
   parser.add_argument('--topic',
                       type=str,
-                      required=True,
                       help='Pub/Sub topic to read from')
+  parser.add_argument('--subscription',
+                      type=str,
+                      help='Pub/Sub subscription to read from')
   parser.add_argument('--dataset',
                       type=str,
                       required=True,
@@ -291,6 +291,11 @@ def run(argv=None):
 
   args, pipeline_args = parser.parse_known_args(argv)
 
+  if args.topic is None and args.subscription is None:
+    parser.print_usage()
+    print(sys.argv[0] + ': error: one of --topic or --subscription is required')
+    sys.exit(1)
+
   options = PipelineOptions(pipeline_args)
 
   # We also require the --project option to access --dataset
@@ -301,7 +306,7 @@ def run(argv=None):
 
   # We use the save_main_session option because one or more DoFn's in this
   # workflow rely on global context (e.g., a module imported at module level).
-  options.view_as(SetupOptions).save_main_session = True
+  options.view_as(SetupOptions).save_main_session = save_main_session
 
   # Enforce that this pipeline is always run in streaming mode
   options.view_as(StandardOptions).streaming = True
@@ -309,9 +314,18 @@ def run(argv=None):
   with beam.Pipeline(options=options) as p:
     # Read game events from Pub/Sub using custom timestamps, which are extracted
     # from the pubsub data elements, and parse the data.
+
+    # Read from PubSub into a PCollection.
+    if args.subscription:
+      scores = p | 'ReadPubSub' >> beam.io.ReadFromPubSub(
+          subscription=args.subscription)
+    else:
+      scores = p | 'ReadPubSub' >> beam.io.ReadFromPubSub(
+          topic=args.topic)
+
     events = (
-        p
-        | 'ReadPubSub' >> beam.io.gcp.pubsub.ReadStringsFromPubSub(args.topic)
+        scores
+        | 'DecodeString' >> beam.Map(lambda b: b.decode('utf-8'))
         | 'ParseGameEventFn' >> beam.ParDo(ParseGameEventFn())
         | 'AddEventTimestamps' >> beam.Map(
             lambda elem: beam.window.TimestampedValue(elem, elem['timestamp'])))
@@ -327,7 +341,7 @@ def run(argv=None):
              'total_score': 'INTEGER',
              'window_start': 'STRING',
              'processing_time': 'STRING',
-         }))
+         }, options.view_as(GoogleCloudOptions).project))
 
     def format_user_score_sums(user_score):
       (user, score) = user_score
@@ -341,7 +355,7 @@ def run(argv=None):
          args.table_name + '_users', args.dataset, {
              'user': 'STRING',
              'total_score': 'INTEGER',
-         }))
+         }, options.view_as(GoogleCloudOptions).project))
 
 
 if __name__ == '__main__':

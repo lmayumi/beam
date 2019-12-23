@@ -40,9 +40,7 @@ import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@link ImmutabilityCheckingBundleFactory}.
- */
+/** Tests for {@link ImmutabilityCheckingBundleFactory}. */
 @RunWith(JUnit4.class)
 public class ImmutabilityCheckingBundleFactoryTest {
 
@@ -52,11 +50,10 @@ public class ImmutabilityCheckingBundleFactoryTest {
   private PCollection<byte[]> created;
   private PCollection<byte[]> transformed;
 
-
   @Before
   public void setup() {
     created = p.apply(Create.empty(ByteArrayCoder.of()));
-    transformed = created.apply(ParDo.of(new IdentityDoFn<byte[]>()));
+    transformed = created.apply(ParDo.of(new IdentityDoFn<>()));
     DirectGraphVisitor visitor = new DirectGraphVisitor();
     p.traverseTopologically(visitor);
     factory =

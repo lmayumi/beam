@@ -45,6 +45,8 @@ import argparse
 import logging
 import re
 
+from past.builtins import unicode
+
 import apache_beam as beam
 from apache_beam.io import ReadFromText
 from apache_beam.io import WriteToText
@@ -58,7 +60,9 @@ from apache_beam.testing.util import equal_to
 class FilterTextFn(beam.DoFn):
   """A DoFn that filters for a specific key based on a regular expression."""
   def __init__(self, pattern):
-    super(FilterTextFn, self).__init__()
+    # TODO(BEAM-6158): Revert the workaround once we can pickle super() on py3.
+    # super(FilterTextFn, self).__init__()
+    beam.DoFn.__init__(self)
     self.pattern = pattern
     # A custom metric can track values in your pipeline as it runs. Those
     # values will be available in the monitoring system of the runner used
@@ -105,7 +109,7 @@ class CountWords(beam.PTransform):
             | 'count' >> beam.Map(count_ones))
 
 
-def run(argv=None):
+def run(argv=None, save_main_session=True):
   """Runs the debugging wordcount pipeline."""
 
   parser = argparse.ArgumentParser()
@@ -121,7 +125,7 @@ def run(argv=None):
   # We use the save_main_session option because one or more DoFn's in this
   # workflow rely on global context (e.g., a module imported at module level).
   pipeline_options = PipelineOptions(pipeline_args)
-  pipeline_options.view_as(SetupOptions).save_main_session = True
+  pipeline_options.view_as(SetupOptions).save_main_session = save_main_session
   with beam.Pipeline(options=pipeline_options) as p:
 
     # Read the text file[pattern] into a PCollection, count the occurrences of

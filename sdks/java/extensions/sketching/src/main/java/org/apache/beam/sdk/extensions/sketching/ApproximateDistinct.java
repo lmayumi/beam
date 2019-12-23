@@ -17,16 +17,14 @@
  */
 package org.apache.beam.sdk.extensions.sketching;
 
-import static com.google.common.base.Preconditions.checkArgument;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkArgument;
 
 import com.clearspring.analytics.stream.cardinality.CardinalityMergeException;
 import com.clearspring.analytics.stream.cardinality.HyperLogLogPlus;
 import com.google.auto.value.AutoValue;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-
 import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.coders.ByteArrayCoder;
 import org.apache.beam.sdk.coders.Coder;
@@ -202,6 +200,11 @@ import org.apache.beam.sdk.values.PCollection;
  *
  * }</pre>
  *
+ * Consider using the {@code HllCount.Init} transform in the {@code zetasketch} extension module if
+ * you need to create sketches compatible with Google Cloud BigQuery. For more details about using
+ * {@code HllCount} and the {@code zetasketch} extension module, see
+ * https://s.apache.org/hll-in-beam#bookmark=id.v6chsij1ixo7
+ *
  * <p><b>Warning: this class is experimental.</b> Its API is subject to change in future versions of
  * Beam. For example, it may be merged with the {@link
  * org.apache.beam.sdk.transforms.ApproximateUnique} transform.
@@ -233,7 +236,7 @@ public final class ApproximateDistinct {
   /**
    * Implementation of {@link #globally()}.
    *
-   * @param <InputT>
+   * @param <InputT> the type of the elements in the input {@link PCollection}
    */
   @AutoValue
   public abstract static class GloballyDistinct<InputT>
@@ -260,10 +263,32 @@ public final class ApproximateDistinct {
       abstract GloballyDistinct<InputT> build();
     }
 
+    /**
+     * Sets the precision {@code p}.
+     *
+     * <p>Keep in mind that {@code p} cannot be lower than 4, because the estimation would be too
+     * inaccurate.
+     *
+     * <p>See {@link ApproximateDistinct#precisionForRelativeError(double)} and {@link
+     * ApproximateDistinct#relativeErrorForPrecision(int)} to have more information about the
+     * relationship between precision and relative error.
+     *
+     * @param p the precision value for the normal representation
+     */
     public GloballyDistinct<InputT> withPrecision(int p) {
       return toBuilder().setPrecision(p).build();
     }
 
+    /**
+     * Sets the sparse representation's precision {@code sp}.
+     *
+     * <p>Values above 32 are not yet supported by the AddThis version of HyperLogLog+.
+     *
+     * <p>Fore more information about the sparse representation, read Google's paper available <a
+     * href="https://research.google.com/pubs/pub40671.html">here</a>.
+     *
+     * @param sp the precision of HyperLogLog+' sparse representation
+     */
     public GloballyDistinct<InputT> withSparsePrecision(int sp) {
       return toBuilder().setSparsePrecision(sp).build();
     }
@@ -274,7 +299,7 @@ public final class ApproximateDistinct {
           .apply(
               "Compute HyperLogLog Structure",
               Combine.globally(
-                  ApproximateDistinctFn.<InputT>create(input.getCoder())
+                  ApproximateDistinctFn.create(input.getCoder())
                       .withPrecision(this.precision())
                       .withSparseRepresentation(this.sparsePrecision())))
           .apply("Retrieve Cardinality", ParDo.of(RetrieveCardinality.globally()));
@@ -284,8 +309,8 @@ public final class ApproximateDistinct {
   /**
    * Implementation of {@link #perKey()}.
    *
-   * @param <K>
-   * @param <V>
+   * @param <K> type of the keys mapping the elements
+   * @param <V> type of the values being combined per key
    */
   @AutoValue
   public abstract static class PerKeyDistinct<K, V>
@@ -312,10 +337,32 @@ public final class ApproximateDistinct {
       abstract PerKeyDistinct<K, V> build();
     }
 
+    /**
+     * Sets the precision {@code p}.
+     *
+     * <p>Keep in mind that {@code p} cannot be lower than 4, because the estimation would be too
+     * inaccurate.
+     *
+     * <p>See {@link ApproximateDistinct#precisionForRelativeError(double)} and {@link
+     * ApproximateDistinct#relativeErrorForPrecision(int)} to have more information about the
+     * relationship between precision and relative error.
+     *
+     * @param p the precision value for the normal representation
+     */
     public PerKeyDistinct<K, V> withPrecision(int p) {
       return toBuilder().setPrecision(p).build();
     }
 
+    /**
+     * Sets the sparse representation's precision {@code sp}.
+     *
+     * <p>Values above 32 are not yet supported by the AddThis version of HyperLogLog+.
+     *
+     * <p>Fore more information about the sparse representation, read Google's paper available <a
+     * href="https://research.google.com/pubs/pub40671.html">here</a>.
+     *
+     * @param sp the precision of HyperLogLog+' sparse representation
+     */
     public PerKeyDistinct<K, V> withSparsePrecision(int sp) {
       return toBuilder().setSparsePrecision(sp).build();
     }
@@ -325,11 +372,11 @@ public final class ApproximateDistinct {
       KvCoder<K, V> inputCoder = (KvCoder<K, V>) input.getCoder();
       return input
           .apply(
-              Combine.<K, V, HyperLogLogPlus>perKey(
-                  ApproximateDistinctFn.<V>create(inputCoder.getValueCoder())
+              Combine.perKey(
+                  ApproximateDistinctFn.create(inputCoder.getValueCoder())
                       .withPrecision(this.precision())
                       .withSparseRepresentation(this.sparsePrecision())))
-          .apply("Retrieve Cardinality", ParDo.of(RetrieveCardinality.<K>perKey()));
+          .apply("Retrieve Cardinality", ParDo.of(RetrieveCardinality.perKey()));
     }
   }
 
@@ -362,13 +409,14 @@ public final class ApproximateDistinct {
       try {
         coder.verifyDeterministic();
       } catch (Coder.NonDeterministicException e) {
-        throw new IllegalArgumentException("Coder is not deterministic ! " + e.getMessage(), e);
+        throw new IllegalArgumentException(
+            "Coder must be deterministic to perform this sketch." + e.getMessage(), e);
       }
       return new ApproximateDistinctFn<>(12, 0, coder);
     }
 
     /**
-     * Returns a new {@link ApproximateDistinctFn} combiner with a new precision {@code p}.
+     * Returns an {@link ApproximateDistinctFn} combiner with a new precision {@code p}.
      *
      * <p>Keep in mind that {@code p} cannot be lower than 4, because the estimation would be too
      * inaccurate.
@@ -385,7 +433,7 @@ public final class ApproximateDistinct {
     }
 
     /**
-     * Returns a new {@link ApproximateDistinctFn} combiner with a sparse representation of
+     * Returns an {@link ApproximateDistinctFn} combiner with a new sparse representation's
      * precision {@code sp}.
      *
      * <p>Values above 32 are not yet supported by the AddThis version of HyperLogLog+.
@@ -491,9 +539,8 @@ public final class ApproximateDistinct {
    * Utility class that provides {@link DoFn}s to retrieve the cardinality from a {@link
    * HyperLogLogPlus} structure in a global or perKey context.
    */
-  public static class RetrieveCardinality {
-
-    public static <K> DoFn<KV<K, HyperLogLogPlus>, KV<K, Long>> perKey() {
+  private static class RetrieveCardinality {
+    private static <K> DoFn<KV<K, HyperLogLogPlus>, KV<K, Long>> perKey() {
       return new DoFn<KV<K, HyperLogLogPlus>, KV<K, Long>>() {
         @ProcessElement
         public void processElement(ProcessContext c) {
@@ -503,7 +550,7 @@ public final class ApproximateDistinct {
       };
     }
 
-    public static DoFn<HyperLogLogPlus, Long> globally() {
+    private static DoFn<HyperLogLogPlus, Long> globally() {
       return new DoFn<HyperLogLogPlus, Long>() {
         @ProcessElement
         public void apply(ProcessContext c) {

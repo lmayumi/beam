@@ -17,21 +17,14 @@
  */
 package org.apache.beam.sdk.io;
 
-import static com.google.common.base.MoreObjects.firstNonNull;
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.base.Verify.verifyNotNull;
 import static org.apache.beam.sdk.io.WriteFiles.UNKNOWN_SHARDNUM;
 import static org.apache.beam.sdk.values.TypeDescriptors.extractFromTypeParameters;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.MoreObjects.firstNonNull;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkArgument;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Verify.verifyNotNull;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.MoreObjects;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Ordering;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -39,14 +32,14 @@ import java.io.Serializable;
 import java.nio.channels.WritableByteChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.UUID;
 import javax.annotation.Nullable;
 import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.annotations.Experimental.Kind;
@@ -72,6 +65,7 @@ import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.display.HasDisplayData;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo.PaneInfoCoder;
 import org.apache.beam.sdk.util.MimeTypes;
@@ -79,9 +73,14 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TypeDescriptor;
 import org.apache.beam.sdk.values.TypeDescriptors.TypeVariableExtractor;
-import org.joda.time.Instant;
-import org.joda.time.format.DateTimeFormat;
-import org.joda.time.format.DateTimeFormatter;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.MoreObjects;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableSet;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Lists;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Maps;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -103,10 +102,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>In order to ensure fault-tolerance, a bundle may be executed multiple times (e.g., in the
  * event of failure/retry or for redundancy). However, exactly one of these executions will have its
- * result passed to the finalize method. Each call to {@link Writer#openWindowed} or {@link
- * Writer#openUnwindowed} is passed a unique <i>bundle id</i> when it is called by the WriteFiles
- * transform, so even redundant or retried bundles will have a unique way of identifying their
- * output.
+ * result passed to the finalize method. Each call to {@link Writer#open} is passed a unique
+ * <i>bundle id</i> when it is called by the WriteFiles transform, so even redundant or retried
+ * bundles will have a unique way of identifying their output.
  *
  * <p>The bundle id should be used to guarantee that a bundle's output is unique. This uniqueness
  * guarantee is important; if a bundle is to be output to a file, for example, the name of the file
@@ -139,10 +137,13 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
     /** @see Compression#BZIP2 */
     BZIP2(Compression.BZIP2),
 
+    /** @see Compression#ZSTD */
+    ZSTD(Compression.ZSTD),
+
     /** @see Compression#DEFLATE */
     DEFLATE(Compression.DEFLATE);
 
-    private Compression canonical;
+    private final Compression canonical;
 
     CompressionType(Compression canonical) {
       this.canonical = canonical;
@@ -165,7 +166,7 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
     }
 
     public static CompressionType fromCanonical(Compression canonical) {
-      switch(canonical) {
+      switch (canonical) {
         case AUTO:
           throw new IllegalArgumentException("AUTO is not supported for writing");
 
@@ -180,6 +181,9 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
 
         case ZIP:
           throw new IllegalArgumentException("ZIP is unsupported");
+
+        case ZSTD:
+          return ZSTD;
 
         case DEFLATE:
           return DEFLATE;
@@ -234,7 +238,7 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
       <SideInputT> SideInputT sideInput(PCollectionView<SideInputT> view);
     }
 
-    @Nullable private SideInputAccessor sideInputAccessor;
+    @Nullable private transient SideInputAccessor sideInputAccessor;
 
     static class SideInputAccessorViaProcessContext implements SideInputAccessor {
       private DoFn<?, ?>.ProcessContext processContext;
@@ -331,7 +335,8 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
       } catch (CannotProvideCoderException e) {
         throw new CannotProvideCoderException(
             "Failed to infer coder for DestinationT from type "
-                + descriptor + ", please provide it explicitly by overriding getDestinationCoder()",
+                + descriptor
+                + ", please provide it explicitly by overriding getDestinationCoder()",
             e);
       }
     }
@@ -435,6 +440,7 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
   /** Return a subclass of {@link WriteOperation} that will manage the write to the sink. */
   public abstract WriteOperation<DestinationT, OutputT> createWriteOperation();
 
+  @Override
   public void populateDisplayData(DisplayData.Builder builder) {
     getDynamicDestinations().populateDisplayData(builder);
   }
@@ -447,8 +453,8 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
    * written,
    *
    * <ol>
-   *   <li>{@link WriteOperation#finalize} is given a list of the temporary files containing the
-   *       output bundles.
+   *   <li>{@link WriteOperation#finalizeDestination} is given a list of the temporary files
+   *       containing the output bundles.
    *   <li>During finalize, these temporary files are copied to final output locations and named
    *       according to a file naming template.
    *   <li>Finally, any temporary files that were created during the write are removed.
@@ -500,7 +506,7 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
      *
      * <p>Default is a uniquely named subdirectory of the provided tempDirectory, e.g. if
      * tempDirectory is /path/to/foo/, the temporary directory will be
-     * /path/to/foo/temp-beam-foo-$date.
+     * /path/to/foo/.temp-beam-$uuid.
      *
      * @param sink the FileBasedSink that will be used to configure this write operation.
      */
@@ -512,20 +518,12 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
 
     private static class TemporaryDirectoryBuilder
         implements SerializableFunction<ResourceId, ResourceId> {
-      private static final AtomicLong TEMP_COUNT = new AtomicLong(0);
-      private static final DateTimeFormatter TEMPDIR_TIMESTAMP =
-          DateTimeFormat.forPattern("yyyy-MM-dd_HH-mm-ss");
-      // The intent of the code is to have a consistent value of tempDirectory across
-      // all workers, which wouldn't happen if now() was called inline.
-      private final String timestamp = Instant.now().toString(TEMPDIR_TIMESTAMP);
-      // Multiple different sinks may be used in the same output directory; use tempId to create a
-      // separate temp directory for each.
-      private final Long tempId = TEMP_COUNT.getAndIncrement();
+      private final UUID tempUUID = UUID.randomUUID();
 
       @Override
       public ResourceId apply(ResourceId tempDirectory) {
-        // Temp directory has a timestamp and a unique ID
-        String tempDirName = String.format(TEMP_DIRECTORY_PREFIX + "-%s-%s", timestamp, tempId);
+        // Temp directory has a random UUID postfix (BEAM-7689)
+        String tempDirName = String.format(TEMP_DIRECTORY_PREFIX + "-%s", tempUUID);
         return tempDirectory
             .getCurrentDirectory()
             .resolve(tempDirName, StandardResolveOptions.RESOLVE_DIRECTORY);
@@ -577,32 +575,40 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
      * not be cleaned up. Note that {@link WriteFiles} does attempt clean up files if exceptions
      * are thrown, however there are still some scenarios where temporary files might be left.
      */
-    public void removeTemporaryFiles(Set<ResourceId> filenames) throws IOException {
+    public void removeTemporaryFiles(Collection<ResourceId> filenames) throws IOException {
       removeTemporaryFiles(filenames, !windowedWrites);
     }
 
     @Experimental(Kind.FILESYSTEM)
-    protected final List<KV<FileResult<DestinationT>, ResourceId>> buildOutputFilenames(
+    protected final List<KV<FileResult<DestinationT>, ResourceId>> finalizeDestination(
         @Nullable DestinationT dest,
         @Nullable BoundedWindow window,
         @Nullable Integer numShards,
-        Iterable<FileResult<DestinationT>> writerResults) {
-      for (FileResult<DestinationT> res : writerResults) {
+        Collection<FileResult<DestinationT>> existingResults)
+        throws Exception {
+      Collection<FileResult<DestinationT>> completeResults =
+          windowedWrites
+              ? existingResults
+              : createMissingEmptyShards(dest, numShards, existingResults);
+
+      for (FileResult<DestinationT> res : completeResults) {
         checkArgument(
             Objects.equals(dest, res.getDestination()),
             "File result has wrong destination: expected %s, got %s",
-            dest, res.getDestination());
+            dest,
+            res.getDestination());
         checkArgument(
             Objects.equals(window, res.getWindow()),
             "File result has wrong window: expected %s, got %s",
-            window, res.getWindow());
+            window,
+            res.getWindow());
       }
       List<KV<FileResult<DestinationT>, ResourceId>> outputFilenames = Lists.newArrayList();
 
       final int effectiveNumShards;
       if (numShards != null) {
         effectiveNumShards = numShards;
-        for (FileResult<DestinationT> res : writerResults) {
+        for (FileResult<DestinationT> res : completeResults) {
           checkArgument(
               res.getShard() != UNKNOWN_SHARDNUM,
               "Fixed sharding into %s shards was specified, "
@@ -611,8 +617,8 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
               res);
         }
       } else {
-        effectiveNumShards = Iterables.size(writerResults);
-        for (FileResult<DestinationT> res : writerResults) {
+        effectiveNumShards = Iterables.size(completeResults);
+        for (FileResult<DestinationT> res : completeResults) {
           checkArgument(
               res.getShard() == UNKNOWN_SHARDNUM,
               "Runner-chosen sharding was specified, "
@@ -623,30 +629,11 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
 
       List<FileResult<DestinationT>> resultsWithShardNumbers = Lists.newArrayList();
       if (numShards != null) {
-        resultsWithShardNumbers = Lists.newArrayList(writerResults);
+        resultsWithShardNumbers = Lists.newArrayList(completeResults);
       } else {
-        checkState(
-            !windowedWrites,
-            "When doing windowed writes, shards should have been assigned when writing");
-        // Sort files for idempotence. Sort by temporary filename.
-        // Note that this codepath should not be used when processing triggered windows. In the
-        // case of triggers, the list of FileResult objects in the Finalize iterable is not
-        // deterministic, and might change over retries. This breaks the assumption below that
-        // sorting the FileResult objects provides idempotency.
-        List<FileResult<DestinationT>> sortedByTempFilename =
-            Ordering.from(
-                    new Comparator<FileResult<DestinationT>>() {
-                      @Override
-                      public int compare(
-                          FileResult<DestinationT> first, FileResult<DestinationT> second) {
-                        String firstFilename = first.getTempFilename().toString();
-                        String secondFilename = second.getTempFilename().toString();
-                        return firstFilename.compareTo(secondFilename);
-                      }
-                    })
-                .sortedCopy(writerResults);
-        for (int i = 0; i < sortedByTempFilename.size(); i++) {
-          resultsWithShardNumbers.add(sortedByTempFilename.get(i).withShard(i));
+        int i = 0;
+        for (FileResult<DestinationT> res : completeResults) {
+          resultsWithShardNumbers.add(res.withShard(i++));
         }
       }
 
@@ -654,10 +641,12 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
       for (FileResult<DestinationT> result : resultsWithShardNumbers) {
         checkArgument(
             result.getShard() != UNKNOWN_SHARDNUM, "Should have set shard number on %s", result);
-        ResourceId finalFilename = result.getDestinationFile(
-            getSink().getDynamicDestinations(),
-            effectiveNumShards,
-            getSink().getWritableByteChannelFactory());
+        ResourceId finalFilename =
+            result.getDestinationFile(
+                windowedWrites,
+                getSink().getDynamicDestinations(),
+                effectiveNumShards,
+                getSink().getWritableByteChannelFactory());
         checkArgument(
             !distinctFilenames.containsKey(finalFilename),
             "Filename policy must generate unique filenames, but generated the same name %s "
@@ -671,10 +660,73 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
       return outputFilenames;
     }
 
+    private Collection<FileResult<DestinationT>> createMissingEmptyShards(
+        @Nullable DestinationT dest,
+        @Nullable Integer numShards,
+        Collection<FileResult<DestinationT>> existingResults)
+        throws Exception {
+      Collection<FileResult<DestinationT>> completeResults;
+      LOG.info("Finalizing for destination {} num shards {}.", dest, existingResults.size());
+      if (numShards != null) {
+        checkArgument(
+            existingResults.size() <= numShards,
+            "Fixed sharding into %s shards was specified, but got %s file results",
+            numShards,
+            existingResults.size());
+      }
+      // We must always output at least 1 shard, and honor user-specified numShards
+      // if set.
+      Set<Integer> missingShardNums;
+      if (numShards == null) {
+        missingShardNums =
+            existingResults.isEmpty() ? ImmutableSet.of(UNKNOWN_SHARDNUM) : ImmutableSet.of();
+      } else {
+        missingShardNums = Sets.newHashSet();
+        for (int i = 0; i < numShards; ++i) {
+          missingShardNums.add(i);
+        }
+        for (FileResult<DestinationT> res : existingResults) {
+          checkArgument(
+              res.getShard() != UNKNOWN_SHARDNUM,
+              "Fixed sharding into %s shards was specified, "
+                  + "but file result %s does not specify a shard",
+              numShards,
+              res);
+          missingShardNums.remove(res.getShard());
+        }
+      }
+      completeResults = Lists.newArrayList(existingResults);
+      if (!missingShardNums.isEmpty()) {
+        LOG.info(
+            "Creating {} empty output shards in addition to {} written for destination {}.",
+            missingShardNums.size(),
+            existingResults.size(),
+            dest);
+        for (int shard : missingShardNums) {
+          String uuid = UUID.randomUUID().toString();
+          LOG.info("Opening empty writer {} for destination {}", uuid, dest);
+          Writer<DestinationT, ?> writer = createWriter();
+          writer.setDestination(dest);
+          // Currently this code path is only called in the unwindowed case.
+          writer.open(uuid);
+          writer.close();
+          completeResults.add(
+              new FileResult<>(
+                  writer.getOutputFile(),
+                  shard,
+                  GlobalWindow.INSTANCE,
+                  PaneInfo.ON_TIME_AND_ONLY_FIRING,
+                  dest));
+        }
+        LOG.debug("Done creating extra shards for {}.", dest);
+      }
+      return completeResults;
+    }
+
     /**
      * Copy temporary files to final output filenames using the file naming template.
      *
-     * <p>Can be called from subclasses that override {@link WriteOperation#finalize}.
+     * <p>Can be called from subclasses that override {@link WriteOperation#finalizeDestination}.
      *
      * <p>Files will be named according to the {@link FilenamePolicy}. The order of the output files
      * will be the same as the sorted order of the input filenames. In other words (when using
@@ -685,40 +737,37 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
      */
     @VisibleForTesting
     @Experimental(Kind.FILESYSTEM)
-    final void copyToOutputFiles(
+    final void moveToOutputFiles(
         List<KV<FileResult<DestinationT>, ResourceId>> resultsToFinalFilenames) throws IOException {
       int numFiles = resultsToFinalFilenames.size();
-      if (numFiles > 0) {
-        LOG.debug("Copying {} files.", numFiles);
-        List<ResourceId> srcFiles = new ArrayList<>(resultsToFinalFilenames.size());
-        List<ResourceId> dstFiles = new ArrayList<>(resultsToFinalFilenames.size());
-        for (KV<FileResult<DestinationT>, ResourceId> entry : resultsToFinalFilenames) {
-          srcFiles.add(entry.getKey().getTempFilename());
-          dstFiles.add(entry.getValue());
-          LOG.info(
-              "Will copy temporary file {} to final location {}",
-              entry.getKey().getTempFilename(),
-              entry.getValue());
-        }
-        // During a failure case, files may have been deleted in an earlier step. Thus
-        // we ignore missing files here.
-        FileSystems.copy(srcFiles, dstFiles, StandardMoveOptions.IGNORE_MISSING_FILES);
-      } else {
-        LOG.info("No output files to write.");
+
+      LOG.debug("Copying {} files.", numFiles);
+      List<ResourceId> srcFiles = new ArrayList<>();
+      List<ResourceId> dstFiles = new ArrayList<>();
+      for (KV<FileResult<DestinationT>, ResourceId> entry : resultsToFinalFilenames) {
+        srcFiles.add(entry.getKey().getTempFilename());
+        dstFiles.add(entry.getValue());
+        LOG.info(
+            "Will copy temporary file {} to final location {}", entry.getKey(), entry.getValue());
       }
+      // During a failure case, files may have been deleted in an earlier step. Thus
+      // we ignore missing files here.
+      FileSystems.rename(srcFiles, dstFiles, StandardMoveOptions.IGNORE_MISSING_FILES);
+      removeTemporaryFiles(srcFiles);
     }
 
     /**
      * Removes temporary output files. Uses the temporary directory to find files to remove.
      *
-     * <p>Can be called from subclasses that override {@link WriteOperation#finalize}.
+     * <p>Can be called from subclasses that override {@link WriteOperation#finalizeDestination}.
      * <b>Note:</b>If finalize is overridden and does <b>not</b> rename or otherwise finalize
      * temporary files, this method will remove them.
      */
     @VisibleForTesting
     @Experimental(Kind.FILESYSTEM)
     final void removeTemporaryFiles(
-        Set<ResourceId> knownFiles, boolean shouldRemoveTemporaryDirectory) throws IOException {
+        Collection<ResourceId> knownFiles, boolean shouldRemoveTemporaryDirectory)
+        throws IOException {
       ResourceId tempDir = tempDirectory.get();
       LOG.debug("Removing temporary bundle output files in {}.", tempDir);
 
@@ -742,7 +791,10 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
                   FileSystems.match(Collections.singletonList(tempDir.toString() + "*")));
           for (Metadata matchResult : singleMatch.metadata()) {
             if (allMatches.add(matchResult.resourceId())) {
-              LOG.info("Will also remove unknown temporary file {}", matchResult.resourceId());
+              LOG.warn(
+                  "Will also remove unknown temporary file {}. This might indicate that other process/job is using "
+                      + "the same temporary folder and result in data consistency issues.",
+                  matchResult.resourceId());
             }
           }
         } catch (Exception e) {
@@ -805,9 +857,6 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
     /** Unique id for this output bundle. */
     private @Nullable String id;
 
-    private @Nullable BoundedWindow window;
-    private @Nullable PaneInfo paneInfo;
-    private int shard = -1;
     private @Nullable DestinationT destination;
 
     /** The output file for this bundle. May be null if opening failed. */
@@ -857,65 +906,14 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
     protected void finishWrite() throws Exception {}
 
     /**
-     * Performs bundle initialization. For example, creates a temporary file for writing or
-     * initializes any state that will be used across calls to {@link Writer#write}.
+     * Opens a uniquely named temporary file and initializes the writer using {@link #prepareWrite}.
      *
      * <p>The unique id that is given to open should be used to ensure that the writer's output does
      * not interfere with the output of other Writers, as a bundle may be executed many times for
      * fault tolerance.
-     *
-     * <p>The window and paneInfo arguments are populated when windowed writes are requested. shard
-     * id populated for the case of static sharding. In cases where the runner is dynamically
-     * picking sharding, shard might be set to -1.
      */
-    public final void openWindowed(
-        String uId, BoundedWindow window, PaneInfo paneInfo, int shard, DestinationT destination)
-        throws Exception {
-      if (!getWriteOperation().windowedWrites) {
-        throw new IllegalStateException("openWindowed called a non-windowed sink.");
-      }
-      open(uId, window, paneInfo, shard, destination);
-    }
-
-    /** Called for each value in the bundle. */
-    public abstract void write(OutputT value) throws Exception;
-
-    /**
-     * Similar to {@link #openWindowed} however for the case where unwindowed writes were requested.
-     */
-    public final void openUnwindowed(String uId, int shard, DestinationT destination)
-        throws Exception {
-      if (getWriteOperation().windowedWrites) {
-        throw new IllegalStateException("openUnwindowed called a windowed sink.");
-      }
-      open(uId, null, null, shard, destination);
-    }
-
-    // Helper function to close a channel, on exception cases.
-    // Always throws prior exception, with any new closing exception suppressed.
-    private static void closeChannelAndThrow(
-        WritableByteChannel channel, ResourceId filename, Exception prior) throws Exception {
-      try {
-        channel.close();
-      } catch (Exception e) {
-        LOG.error("Closing channel for {} failed.", filename, e);
-        prior.addSuppressed(e);
-        throw prior;
-      }
-    }
-
-    private void open(
-        String uId,
-        @Nullable BoundedWindow window,
-        @Nullable PaneInfo paneInfo,
-        int shard,
-        DestinationT destination)
-        throws Exception {
+    public final void open(String uId) throws Exception {
       this.id = uId;
-      this.window = window;
-      this.paneInfo = paneInfo;
-      this.shard = shard;
-      this.destination = destination;
       ResourceId tempDirectory = getWriteOperation().tempDirectory.get();
       outputFile = tempDirectory.resolve(id, StandardResolveOptions.RESOLVE_FILE);
       verifyNotNull(
@@ -925,15 +923,6 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
           getWriteOperation().getSink().writableByteChannelFactory;
       // The factory may force a MIME type or it may return null, indicating to use the sink's MIME.
       String channelMimeType = firstNonNull(factory.getMimeType(), mimeType);
-      LOG.info(
-          "Opening temporary file {} with MIME type {} "
-              + "to write destination {} shard {} window {} pane {}",
-          outputFile,
-          channelMimeType,
-          destination,
-          shard,
-          window,
-          paneInfo);
       WritableByteChannel tempChannel = FileSystems.create(outputFile, channelMimeType);
       try {
         channel = factory.create(tempChannel);
@@ -960,6 +949,26 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
       LOG.debug("Starting write of bundle {} to {}.", this.id, outputFile);
     }
 
+    /** Called for each value in the bundle. */
+    public abstract void write(OutputT value) throws Exception;
+
+    public ResourceId getOutputFile() {
+      return outputFile;
+    }
+
+    // Helper function to close a channel, on exception cases.
+    // Always throws prior exception, with any new closing exception suppressed.
+    private static void closeChannelAndThrow(
+        WritableByteChannel channel, ResourceId filename, Exception prior) throws Exception {
+      try {
+        channel.close();
+      } catch (Exception e) {
+        LOG.error("Closing channel for {} failed.", filename, e);
+        prior.addSuppressed(e);
+        throw prior;
+      }
+    }
+
     public final void cleanup() throws Exception {
       if (outputFile != null) {
         LOG.info("Deleting temporary file {}", outputFile);
@@ -970,47 +979,43 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
     }
 
     /** Closes the channel and returns the bundle result. */
-    public final FileResult<DestinationT> close() throws Exception {
+    public final void close() throws Exception {
       checkState(outputFile != null, "FileResult.close cannot be called with a null outputFile");
+      LOG.debug("Closing {}", outputFile);
 
-      LOG.debug("Writing footer to {}.", outputFile);
       try {
         writeFooter();
       } catch (Exception e) {
-        LOG.error("Writing footer to {} failed, closing channel.", outputFile, e);
         closeChannelAndThrow(channel, outputFile, e);
       }
 
-      LOG.debug("Finishing write to {}.", outputFile);
       try {
         finishWrite();
       } catch (Exception e) {
-        LOG.error("Finishing write to {} failed, closing channel.", outputFile, e);
         closeChannelAndThrow(channel, outputFile, e);
       }
 
-      checkState(
-          channel.isOpen(),
-          "Channel %s to %s should only be closed by its owner: %s",
-          channel,
-          outputFile);
-
-      LOG.debug("Closing channel to {}.", outputFile);
-      try {
-        channel.close();
-      } catch (Exception e) {
-        throw new IOException(String.format("Failed closing channel to %s", outputFile), e);
+      // It is valid for a subclass to either close the channel or not.
+      // They would typically close the channel e.g. if they are wrapping it in another channel
+      // and the wrapper needs to be closed.
+      if (channel.isOpen()) {
+        LOG.debug("Closing channel to {}.", outputFile);
+        try {
+          channel.close();
+        } catch (Exception e) {
+          throw new IOException(String.format("Failed closing channel to %s", outputFile), e);
+        }
       }
-
-      FileResult<DestinationT> result =
-          new FileResult<>(outputFile, shard, window, paneInfo, destination);
       LOG.info("Successfully wrote temporary file {}", outputFile);
-      return result;
     }
 
     /** Return the WriteOperation that this Writer belongs to. */
     public WriteOperation<DestinationT, OutputT> getWriteOperation() {
       return writeOperation;
+    }
+
+    void setDestination(DestinationT destination) {
+      this.destination = destination;
     }
 
     /** Return the user destination object for this writer. */
@@ -1026,7 +1031,7 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
   public static final class FileResult<DestinationT> {
     private final ResourceId tempFilename;
     private final int shard;
-    private final @Nullable BoundedWindow window;
+    private final BoundedWindow window;
     private final PaneInfo paneInfo;
     private final DestinationT destination;
 
@@ -1034,9 +1039,11 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
     public FileResult(
         ResourceId tempFilename,
         int shard,
-        @Nullable BoundedWindow window,
+        BoundedWindow window,
         PaneInfo paneInfo,
         DestinationT destination) {
+      checkArgument(window != null, "window can not be null");
+      checkArgument(paneInfo != null, "paneInfo can not be null");
       this.tempFilename = tempFilename;
       this.shard = shard;
       this.window = window;
@@ -1071,13 +1078,14 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
 
     @Experimental(Kind.FILESYSTEM)
     public ResourceId getDestinationFile(
+        boolean windowedWrites,
         DynamicDestinations<?, DestinationT, ?> dynamicDestinations,
         int numShards,
         OutputFileHints outputFileHints) {
       checkArgument(getShard() != UNKNOWN_SHARDNUM);
       checkArgument(numShards > 0);
       FilenamePolicy policy = dynamicDestinations.getFilenamePolicy(destination);
-      if (getWindow() != null) {
+      if (windowedWrites) {
         return policy.windowedFilename(
             getShard(), numShards, getWindow(), getPaneInfo(), outputFileHints);
       } else {
@@ -1085,6 +1093,7 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
       }
     }
 
+    @Override
     public String toString() {
       return MoreObjects.toStringHelper(FileResult.class)
           .add("tempFilename", tempFilename)
@@ -1174,9 +1183,7 @@ public abstract class FileBasedSink<UserT, DestinationT, OutputT>
     @Nullable
     String getMimeType();
 
-    /**
-     * @return an optional filename suffix, eg, ".gz" is returned for {@link Compression#GZIP}
-     */
+    /** @return an optional filename suffix, eg, ".gz" is returned for {@link Compression#GZIP} */
     @Nullable
     String getSuggestedFilenameSuffix();
   }

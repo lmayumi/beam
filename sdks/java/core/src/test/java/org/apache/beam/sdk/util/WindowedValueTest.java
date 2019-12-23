@@ -18,12 +18,9 @@
 package org.apache.beam.sdk.util;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
-import static org.hamcrest.Matchers.emptyIterable;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.Assert.assertThat;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
 import java.util.Arrays;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.CoderException;
@@ -34,24 +31,33 @@ import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo.Timing;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 import org.joda.time.Instant;
 import org.junit.Assert;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 /** Test case for {@link WindowedValue}. */
 @RunWith(JUnit4.class)
 public class WindowedValueTest {
+
+  @Rule public ExpectedException thrown = ExpectedException.none();
+
   @Test
   public void testWindowedValueCoder() throws CoderException {
     Instant timestamp = new Instant(1234);
-    WindowedValue<String> value = WindowedValue.of(
-        "abc",
-        new Instant(1234),
-        Arrays.asList(new IntervalWindow(timestamp, timestamp.plus(1000)),
-                      new IntervalWindow(timestamp.plus(1000), timestamp.plus(2000))),
-        PaneInfo.NO_FIRING);
+    WindowedValue<String> value =
+        WindowedValue.of(
+            "abc",
+            new Instant(1234),
+            Arrays.asList(
+                new IntervalWindow(timestamp, timestamp.plus(1000)),
+                new IntervalWindow(timestamp.plus(1000), timestamp.plus(2000))),
+            PaneInfo.NO_FIRING);
 
     Coder<WindowedValue<String>> windowedValueCoder =
         WindowedValue.getFullCoder(StringUtf8Coder.of(), IntervalWindow.getCoder());
@@ -67,8 +73,14 @@ public class WindowedValueTest {
 
   @Test
   public void testFullWindowedValueCoderIsSerializableWithWellKnownCoderType() {
-    CoderProperties.coderSerializable(WindowedValue.getFullCoder(
-        GlobalWindow.Coder.INSTANCE, GlobalWindow.Coder.INSTANCE));
+    CoderProperties.coderSerializable(
+        WindowedValue.getFullCoder(GlobalWindow.Coder.INSTANCE, GlobalWindow.Coder.INSTANCE));
+  }
+
+  @Test
+  public void testParamWindowedValueCoderIsSerializableWithWellKnownCoderType() {
+    CoderProperties.coderSerializable(
+        WindowedValue.getParamWindowedValueCoder(GlobalWindow.Coder.INSTANCE));
   }
 
   @Test
@@ -77,12 +89,9 @@ public class WindowedValueTest {
   }
 
   @Test
-  public void testExplodeWindowsInNoWindowsEmptyIterable() {
-    WindowedValue<String> value =
-        WindowedValue.of(
-            "foo", Instant.now(), ImmutableList.<BoundedWindow>of(), PaneInfo.NO_FIRING);
-
-    assertThat(value.explodeWindows(), emptyIterable());
+  public void testExplodeWindowsInNoWindowsCrash() {
+    thrown.expect(IllegalArgumentException.class);
+    WindowedValue.of("foo", Instant.now(), ImmutableList.of(), PaneInfo.NO_FIRING);
   }
 
   @Test
@@ -117,5 +126,25 @@ public class WindowedValueTest {
             WindowedValue.of("foo", now, futureWindow, pane),
             WindowedValue.of("foo", now, centerWindow, pane),
             WindowedValue.of("foo", now, pastWindow, pane)));
+
+    assertThat(value.isSingleWindowedValue(), equalTo(false));
+  }
+
+  @Test
+  public void testSingleWindowedValueInGlobalWindow() {
+    WindowedValue<Integer> value =
+        WindowedValue.of(1, Instant.now(), GlobalWindow.INSTANCE, PaneInfo.NO_FIRING);
+    assertThat(value.isSingleWindowedValue(), equalTo(true));
+    assertThat(
+        ((WindowedValue.SingleWindowedValue) value).getWindow(), equalTo(GlobalWindow.INSTANCE));
+  }
+
+  @Test
+  public void testSingleWindowedValueInFixedWindow() {
+    Instant now = Instant.now();
+    BoundedWindow w = new IntervalWindow(now, now.plus(1));
+    WindowedValue<Integer> value = WindowedValue.of(1, now, w, PaneInfo.NO_FIRING);
+    assertThat(value.isSingleWindowedValue(), equalTo(true));
+    assertThat(((WindowedValue.SingleWindowedValue) value).getWindow(), equalTo(w));
   }
 }

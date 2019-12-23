@@ -15,24 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.spark.translation.streaming;
 
 import java.util.ArrayList;
 import java.util.List;
-
 import org.apache.beam.runners.spark.coders.CoderHelpers;
 import org.apache.beam.runners.spark.translation.Dataset;
 import org.apache.beam.runners.spark.translation.TranslationUtils;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.util.WindowedValue;
-import org.apache.spark.api.java.JavaRDD;
-import org.apache.spark.api.java.function.VoidFunction;
 import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.api.java.JavaDStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 
 /**
  * DStream holder Can also crate a DStream from a supplied queue of values, but mainly for testing.
@@ -66,33 +61,26 @@ public class UnboundedDataset<T> implements Dataset {
   public void cache(String storageLevel, Coder<?> coder) {
     // we "force" MEMORY storage level in streaming
     if (!StorageLevel.fromString(storageLevel).equals(StorageLevel.MEMORY_ONLY_SER())) {
-      LOG.warn("Provided StorageLevel: {} is ignored for streams, using the default level: {}",
+      LOG.warn(
+          "Provided StorageLevel: {} is ignored for streams, using the default level: {}",
           storageLevel,
           StorageLevel.MEMORY_ONLY_SER());
     }
     // Caching can cause Serialization, we need to code to bytes
     // more details in https://issues.apache.org/jira/browse/BEAM-2669
     Coder<WindowedValue<T>> wc = (Coder<WindowedValue<T>>) coder;
-    this.dStream = dStream.map(CoderHelpers.toByteFunction(wc))
-        .cache()
-        .map(CoderHelpers.fromByteFunction(wc));
-
+    this.dStream =
+        dStream.map(CoderHelpers.toByteFunction(wc)).cache().map(CoderHelpers.fromByteFunction(wc));
   }
 
   @Override
   public void action() {
     // Force computation of DStream.
-    dStream.foreachRDD(new VoidFunction<JavaRDD<WindowedValue<T>>>() {
-      @Override
-      public void call(JavaRDD<WindowedValue<T>> rdd) throws Exception {
-        rdd.foreach(TranslationUtils.<WindowedValue<T>>emptyVoidFunction());
-      }
-    });
+    dStream.foreachRDD(rdd -> rdd.foreach(TranslationUtils.<WindowedValue<T>>emptyVoidFunction()));
   }
 
   @Override
   public void setName(String name) {
     // ignore
   }
-
 }

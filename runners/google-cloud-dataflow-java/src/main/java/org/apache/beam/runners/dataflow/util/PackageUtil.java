@@ -17,8 +17,8 @@
  */
 package org.apache.beam.runners.dataflow.util;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkArgument;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
 
 import com.fasterxml.jackson.core.Base64Variants;
 import com.google.api.client.util.BackOff;
@@ -26,31 +26,21 @@ import com.google.api.client.util.Sleeper;
 import com.google.api.services.dataflow.model.DataflowPackage;
 import com.google.auto.value.AutoValue;
 import com.google.cloud.hadoop.util.ApiErrorExtractor;
-import com.google.common.base.Function;
-import com.google.common.hash.Funnels;
-import com.google.common.hash.Hasher;
-import com.google.common.hash.Hashing;
-import com.google.common.io.ByteSource;
-import com.google.common.io.CountingOutputStream;
-import com.google.common.io.Files;
-import com.google.common.util.concurrent.AsyncFunction;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.ListeningExecutorService;
-import com.google.common.util.concurrent.MoreExecutors;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.Serializable;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.Callable;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -58,14 +48,24 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.annotation.Nullable;
 import org.apache.beam.sdk.annotations.Internal;
 import org.apache.beam.sdk.extensions.gcp.storage.GcsCreateOptions;
+import org.apache.beam.sdk.extensions.gcp.util.BackOffAdapter;
 import org.apache.beam.sdk.io.FileSystems;
 import org.apache.beam.sdk.io.fs.CreateOptions;
 import org.apache.beam.sdk.io.fs.ResolveOptions.StandardResolveOptions;
-import org.apache.beam.sdk.util.BackOffAdapter;
 import org.apache.beam.sdk.util.FluentBackoff;
 import org.apache.beam.sdk.util.MimeTypes;
+import org.apache.beam.sdk.util.MoreFutures;
 import org.apache.beam.sdk.util.ZipFiles;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.hash.Funnels;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.hash.Hasher;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.hash.Hashing;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.io.ByteSource;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.io.CountingOutputStream;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.io.Files;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.util.concurrent.MoreExecutors;
 import org.joda.time.Duration;
+import org.joda.time.Instant;
+import org.joda.time.Seconds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,9 +75,7 @@ class PackageUtil implements Closeable {
 
   private static final Logger LOG = LoggerFactory.getLogger(PackageUtil.class);
 
-  /**
-   * A reasonable upper bound on the number of jars required to launch a Dataflow job.
-   */
+  /** A reasonable upper bound on the number of jars required to launch a Dataflow job. */
   private static final int SANE_CLASSPATH_SIZE = 1000;
 
   private static final int DEFAULT_THREAD_POOL_SIZE = 32;
@@ -93,23 +91,23 @@ class PackageUtil implements Closeable {
   private static final FluentBackoff BACKOFF_FACTORY =
       FluentBackoff.DEFAULT.withMaxRetries(4).withInitialBackoff(Duration.standardSeconds(5));
 
-  /**
-   * Translates exceptions from API calls.
-   */
+  /** Translates exceptions from API calls. */
   private static final ApiErrorExtractor ERROR_EXTRACTOR = new ApiErrorExtractor();
 
-  private final ListeningExecutorService executorService;
+  private final ExecutorService executorService;
 
-  private PackageUtil(ListeningExecutorService executorService) {
+  private PackageUtil(ExecutorService executorService) {
     this.executorService = executorService;
   }
 
   public static PackageUtil withDefaultThreadPool() {
     return PackageUtil.withExecutorService(
-        MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(DEFAULT_THREAD_POOL_SIZE)));
+        MoreExecutors.listeningDecorator(
+            Executors.newFixedThreadPool(
+                DEFAULT_THREAD_POOL_SIZE, MoreExecutors.platformThreadFactory())));
   }
 
-  public static PackageUtil withExecutorService(ListeningExecutorService executorService) {
+  public static PackageUtil withExecutorService(ExecutorService executorService) {
     return new PackageUtil(executorService);
   }
 
@@ -118,9 +116,8 @@ class PackageUtil implements Closeable {
     executorService.shutdown();
   }
 
-
   /** Utility comparator used in uploading packages efficiently. */
-  private static class PackageUploadOrder implements Comparator<PackageAttributes> {
+  private static class PackageUploadOrder implements Comparator<PackageAttributes>, Serializable {
     @Override
     public int compare(PackageAttributes o1, PackageAttributes o2) {
       // Smaller size compares high so that bigger packages are uploaded first.
@@ -136,26 +133,24 @@ class PackageUtil implements Closeable {
   }
 
   /** Asynchronously computes {@link PackageAttributes} for a single staged file. */
-  private ListenableFuture<PackageAttributes> computePackageAttributes(
+  private CompletionStage<PackageAttributes> computePackageAttributes(
       final DataflowPackage source, final String stagingPath) {
 
-    return executorService.submit(
-        new Callable<PackageAttributes>() {
-          @Override
-          public PackageAttributes call() throws Exception {
-            final File file = new File(source.getLocation());
-            if (!file.exists()) {
-              throw new FileNotFoundException(
-                  String.format("Non-existent file to stage: %s", file.getAbsolutePath()));
-            }
-
-            PackageAttributes attributes = PackageAttributes.forFileToStage(file, stagingPath);
-            if (source.getName() != null) {
-              attributes = attributes.withPackageName(source.getName());
-            }
-            return attributes;
+    return MoreFutures.supplyAsync(
+        () -> {
+          final File file = new File(source.getLocation());
+          if (!file.exists()) {
+            throw new FileNotFoundException(
+                String.format("Non-existent file to stage: %s", file.getAbsolutePath()));
           }
-        });
+
+          PackageAttributes attributes = PackageAttributes.forFileToStage(file, stagingPath);
+          if (source.getName() != null) {
+            attributes = attributes.withPackageName(source.getName());
+          }
+          return attributes;
+        },
+        executorService);
   }
 
   private boolean alreadyStaged(PackageAttributes attributes) throws IOException {
@@ -170,17 +165,12 @@ class PackageUtil implements Closeable {
   }
 
   /** Stages one file ("package") if necessary. */
-  public ListenableFuture<StagingResult> stagePackage(
+  public CompletionStage<StagingResult> stagePackage(
       final PackageAttributes attributes,
       final Sleeper retrySleeper,
       final CreateOptions createOptions) {
-    return executorService.submit(
-        new Callable<StagingResult>() {
-          @Override
-          public StagingResult call() throws Exception {
-            return stagePackageSynchronously(attributes, retrySleeper, createOptions);
-          }
-        });
+    return MoreFutures.supplyAsync(
+        () -> stagePackageSynchronously(attributes, retrySleeper, createOptions), executorService);
   }
 
   /** Synchronously stages a package, with retry and backoff for resiliency. */
@@ -233,7 +223,8 @@ class PackageUtil implements Closeable {
               "Upload failed, will NOT retry staging of package: {}",
               sourceDescription,
               ioException);
-          throw new RuntimeException("Could not stage %s to %s", ioException);
+          throw new RuntimeException(
+              String.format("Could not stage %s to %s", sourceDescription, target), ioException);
         } else {
           LOG.warn(
               "Upload attempt failed, sleeping before retrying staging of package: {}",
@@ -275,7 +266,7 @@ class PackageUtil implements Closeable {
   /**
    * Transfers the classpath elements to the staging location using a default {@link Sleeper}.
    *
-   * @see {@link #stageClasspathElements(Collection, String, Sleeper, CreateOptions)}
+   * @see #stageClasspathElements(Collection, String, Sleeper, CreateOptions)
    */
   List<DataflowPackage> stageClasspathElements(
       Collection<String> classpathElements, String stagingPath, CreateOptions createOptions) {
@@ -285,7 +276,7 @@ class PackageUtil implements Closeable {
   /**
    * Transfers the classpath elements to the staging location using default settings.
    *
-   * @see {@link #stageClasspathElements(Collection, String, Sleeper, CreateOptions)}
+   * @see #stageClasspathElements(Collection, String, Sleeper, CreateOptions)
    */
   List<DataflowPackage> stageClasspathElements(
       Collection<String> classpathElements, String stagingPath) {
@@ -296,11 +287,11 @@ class PackageUtil implements Closeable {
   public DataflowPackage stageToFile(
       byte[] bytes, String target, String stagingPath, CreateOptions createOptions) {
     try {
-      return stagePackage(
-              PackageAttributes.forBytesToStage(bytes, target, stagingPath),
-              DEFAULT_SLEEPER,
-              createOptions)
-          .get()
+      return MoreFutures.get(
+              stagePackage(
+                  PackageAttributes.forBytesToStage(bytes, target, stagingPath),
+                  DEFAULT_SLEEPER,
+                  createOptions))
           .getPackageAttributes()
           .getDestination();
     } catch (InterruptedException e) {
@@ -323,15 +314,19 @@ class PackageUtil implements Closeable {
       final String stagingPath,
       final Sleeper retrySleeper,
       final CreateOptions createOptions) {
-    LOG.info("Uploading {} files from PipelineOptions.filesToStage to staging location to "
-        + "prepare for execution.", classpathElements.size());
+    LOG.info(
+        "Uploading {} files from PipelineOptions.filesToStage to staging location to "
+            + "prepare for execution.",
+        classpathElements.size());
+    Instant start = Instant.now();
 
     if (classpathElements.size() > SANE_CLASSPATH_SIZE) {
-      LOG.warn("Your classpath contains {} elements, which Google Cloud Dataflow automatically "
-            + "copies to all workers. Having this many entries on your classpath may be indicative "
-            + "of an issue in your pipeline. You may want to consider trimming the classpath to "
-            + "necessary dependencies only, using --filesToStage pipeline option to override "
-            + "what files are being staged, or bundling several dependencies into one.",
+      LOG.warn(
+          "Your classpath contains {} elements, which Google Cloud Dataflow automatically "
+              + "copies to all workers. Having this many entries on your classpath may be indicative "
+              + "of an issue in your pipeline. You may want to consider trimming the classpath to "
+              + "necessary dependencies only, using --filesToStage pipeline option to override "
+              + "what files are being staged, or bundling several dependencies into one.",
           classpathElements.size());
     }
 
@@ -341,7 +336,7 @@ class PackageUtil implements Closeable {
 
     final AtomicInteger numUploaded = new AtomicInteger(0);
     final AtomicInteger numCached = new AtomicInteger(0);
-    List<ListenableFuture<DataflowPackage>> destinationPackages = new ArrayList<>();
+    List<CompletionStage<DataflowPackage>> destinationPackages = new ArrayList<>();
 
     for (String classpathElement : classpathElements) {
       DataflowPackage sourcePackage = new DataflowPackage();
@@ -360,53 +355,46 @@ class PackageUtil implements Closeable {
         continue;
       }
 
-      // TODO: Java 8 / Guava 23.0: FluentFuture
-      ListenableFuture<StagingResult> stagingResult =
-          Futures.transformAsync(
-              computePackageAttributes(sourcePackage, stagingPath),
-              new AsyncFunction<PackageAttributes, StagingResult>() {
-                @Override
-                public ListenableFuture<StagingResult> apply(
-                    final PackageAttributes packageAttributes) throws Exception {
-                  return stagePackage(packageAttributes, retrySleeper, createOptions);
-                }
-              });
+      CompletionStage<StagingResult> stagingResult =
+          computePackageAttributes(sourcePackage, stagingPath)
+              .thenComposeAsync(
+                  packageAttributes ->
+                      stagePackage(packageAttributes, retrySleeper, createOptions));
 
-      ListenableFuture<DataflowPackage> stagedPackage =
-          Futures.transform(
-              stagingResult,
-              new Function<StagingResult, DataflowPackage>() {
-                @Override
-                public DataflowPackage apply(StagingResult stagingResult) {
-                  if (stagingResult.alreadyStaged()) {
-                    numCached.incrementAndGet();
-                  } else {
-                    numUploaded.incrementAndGet();
-                  }
-                  return stagingResult.getPackageAttributes().getDestination();
+      CompletionStage<DataflowPackage> stagedPackage =
+          stagingResult.thenApply(
+              stagingResult1 -> {
+                if (stagingResult1.alreadyStaged()) {
+                  numCached.incrementAndGet();
+                } else {
+                  numUploaded.incrementAndGet();
                 }
+                return stagingResult1.getPackageAttributes().getDestination();
               });
 
       destinationPackages.add(stagedPackage);
     }
 
     try {
-      ListenableFuture<List<DataflowPackage>> stagingFutures =
-          Futures.allAsList(destinationPackages);
+      CompletionStage<List<DataflowPackage>> stagingFutures =
+          MoreFutures.allAsList(destinationPackages);
       boolean finished = false;
       do {
         try {
-          stagingFutures.get(3L, TimeUnit.MINUTES);
+          MoreFutures.get(stagingFutures, 3L, TimeUnit.MINUTES);
           finished = true;
         } catch (TimeoutException e) {
           // finished will still be false
           LOG.info("Still staging {} files", classpathElements.size());
         }
       } while (!finished);
-      List<DataflowPackage> stagedPackages = stagingFutures.get();
+      List<DataflowPackage> stagedPackages = MoreFutures.get(stagingFutures);
+      Instant done = Instant.now();
       LOG.info(
-          "Staging files complete: {} files cached, {} files newly uploaded",
-          numCached.get(), numUploaded.get());
+          "Staging files complete: {} files cached, {} files newly uploaded in {} seconds",
+          numCached.get(),
+          numUploaded.get(),
+          Seconds.secondsBetween(start, done).getSeconds());
       return stagedPackages;
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -420,6 +408,7 @@ class PackageUtil implements Closeable {
    * Returns a unique name for a file with a given content hash.
    *
    * <p>Directory paths are removed. Example:
+   *
    * <pre>
    * dir="a/b/c/d", contentHash="f000" => d-f000.jar
    * file="a/b/c/d.txt", contentHash="f000" => d-f000.txt
@@ -452,9 +441,7 @@ class PackageUtil implements Closeable {
     }
   }
 
-  /**
-   * Holds the metadata necessary to stage a file or confirm that a staged file has not changed.
-   */
+  /** Holds the metadata necessary to stage a file or confirm that a staged file has not changed. */
   @AutoValue
   abstract static class PackageAttributes {
 
@@ -526,6 +513,7 @@ class PackageUtil implements Closeable {
     public abstract File getSource();
 
     /** @return the bytes to be uploaded, if any */
+    @SuppressWarnings("mutable")
     @Nullable
     public abstract byte[] getBytes();
 

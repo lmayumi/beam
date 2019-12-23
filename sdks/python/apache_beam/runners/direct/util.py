@@ -22,6 +22,8 @@ For internal use only. No backwards compatibility guarantees.
 
 from __future__ import absolute_import
 
+from builtins import object
+
 
 class TransformResult(object):
   """Result of evaluating an AppliedPTransform with a TransformEvaluator."""
@@ -61,6 +63,10 @@ class TimerFiring(object):
     self.time_domain = time_domain
     self.timestamp = timestamp
 
+  def __repr__(self):
+    return 'TimerFiring({!r}, {!r}, {}, {})'.format(
+        self.encoded_key, self.name, self.time_domain, self.timestamp)
+
 
 class KeyedWorkItem(object):
   """A keyed item that can either be a timer firing or a list of elements."""
@@ -68,3 +74,7 @@ class KeyedWorkItem(object):
     self.encoded_key = encoded_key
     self.timer_firings = timer_firings or []
     self.elements = elements or []
+
+  def __repr__(self):
+    return 'KeyedWorkItem({!r}, {}, {})'.format(
+        self.encoded_key, self.timer_firings, self.elements)

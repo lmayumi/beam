@@ -17,14 +17,16 @@
  */
 package org.apache.beam.sdk.transforms;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisplayItem;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkArgument;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.in;
+import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import com.google.common.base.Joiner;
-import com.google.common.collect.ImmutableList;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -37,15 +39,19 @@ import java.util.TreeSet;
 import org.apache.beam.sdk.TestUtils;
 import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.testing.CombineFnTester;
+import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
-import org.apache.beam.sdk.testing.ValidatesRunner;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TimestampedValue;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Joiner;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
+import org.hamcrest.Matchers;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.junit.Rule;
@@ -54,66 +60,30 @@ import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 import org.junit.runners.Parameterized;
-import org.junit.runners.Suite;
 
-/**
- * Tests for Sample transform.
- */
-@RunWith(Suite.class)
-@Suite.SuiteClasses({
-    SampleTest.PickAnyTest.class,
-    SampleTest.MiscTest.class
-})
+/** Tests for Sample transform. */
 public class SampleTest {
-  private static final Integer[] EMPTY = new Integer[] { };
+  private static final Integer[] EMPTY = new Integer[] {};
   private static final Integer[] DATA = new Integer[] {1, 2, 3, 4, 5};
   private static final Integer[] REPEATED_DATA = new Integer[] {1, 1, 2, 2, 3, 3, 4, 4, 5, 5};
 
-  /**
-   * Test variations for Sample transform.
-   */
+  /** Test variations for Sample transform. */
   @RunWith(Parameterized.class)
   public static class PickAnyTest {
-    @Rule
-    public final transient TestPipeline p = TestPipeline.create();
+    @Rule public final transient TestPipeline p = TestPipeline.create();
 
     @Parameterized.Parameters(name = "limit_{1}")
     public static Iterable<Object[]> data() throws IOException {
       return ImmutableList.<Object[]>builder()
           .add(
-              new Object[] {
-                  TestUtils.NO_LINES,
-                  0
-              },
-              new Object[] {
-                  TestUtils.NO_LINES,
-                  1
-              },
-              new Object[] {
-                  TestUtils.LINES,
-                  1
-              },
-              new Object[] {
-                  TestUtils.LINES,
-                  TestUtils.LINES.size() / 2
-              },
-              new Object[] {
-                  TestUtils.LINES,
-                  TestUtils.LINES.size() * 2
-              },
-              new Object[] {
-                  TestUtils.LINES,
-                  TestUtils.LINES.size() - 1
-              },
-              new Object[] {
-                  TestUtils.LINES,
-                  TestUtils.LINES.size()
-              },
-              new Object[] {
-                  TestUtils.LINES,
-                  TestUtils.LINES.size() + 1
-              }
-              )
+              new Object[] {TestUtils.NO_LINES, 0},
+              new Object[] {TestUtils.NO_LINES, 1},
+              new Object[] {TestUtils.LINES, 1},
+              new Object[] {TestUtils.LINES, TestUtils.LINES.size() / 2},
+              new Object[] {TestUtils.LINES, TestUtils.LINES.size() * 2},
+              new Object[] {TestUtils.LINES, TestUtils.LINES.size() - 1},
+              new Object[] {TestUtils.LINES, TestUtils.LINES.size()},
+              new Object[] {TestUtils.LINES, TestUtils.LINES.size() + 1})
           .build();
     }
 
@@ -127,6 +97,7 @@ public class SampleTest {
     private static class VerifyAnySample implements SerializableFunction<Iterable<String>, Void> {
       private final List<String> lines;
       private final int limit;
+
       private VerifyAnySample(List<String> lines, int limit) {
         this.lines = lines;
         this.limit = limit;
@@ -153,41 +124,43 @@ public class SampleTest {
     }
 
     void runPickAnyTest(final List<String> lines, int limit) {
-      checkArgument(new HashSet<String>(lines).size() == lines.size(),
-                    "Duplicates are unsupported.");
+      checkArgument(new HashSet<>(lines).size() == lines.size(), "Duplicates are unsupported.");
 
-      PCollection<String> input = p.apply(Create.of(lines)
-                                                .withCoder(StringUtf8Coder.of()));
+      PCollection<String> input = p.apply(Create.of(lines).withCoder(StringUtf8Coder.of()));
 
-      PCollection<String> output =
-          input.apply(Sample.<String>any(limit));
+      PCollection<String> output = input.apply(Sample.any(limit));
 
-
-      PAssert.that(output)
-             .satisfies(new VerifyAnySample(lines, limit));
+      PAssert.that(output).satisfies(new VerifyAnySample(lines, limit));
 
       p.run();
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testPickAny() {
       runPickAnyTest(lines, limit);
     }
+
+    @Test
+    public void testCombineFn() {
+      CombineFnTester.testCombineFn(
+          Sample.combineFn(limit),
+          lines,
+          allOf(
+              Matchers.<String>iterableWithSize(Math.min(lines.size(), limit)),
+              everyItem(is(in(lines)))));
+    }
   }
 
-  /**
-   * Further tests for Sample transform.
-   */
+  /** Further tests for Sample transform. */
   @RunWith(JUnit4.class)
   public static class MiscTest {
 
-    @Rule
-    public final transient TestPipeline pipeline = TestPipeline.create();
+    @Rule public final transient TestPipeline pipeline = TestPipeline.create();
 
     /**
-     * Verifies that the result of a Sample operation contains the expected number of elements,
-     * and that those elements are a subset of the items in expected.
+     * Verifies that the result of a Sample operation contains the expected number of elements, and
+     * that those elements are a subset of the items in expected.
      */
     @SuppressWarnings("rawtypes")
     public static class VerifyCorrectSample<T extends Comparable>
@@ -224,8 +197,8 @@ public class SampleTest {
 
         assertEquals(expectedSize, actual.size());
 
-        Collections.sort(actual);  // We assume that @expected is already sorted.
-        int i = 0;  // Index into @expected
+        Collections.sort(actual); // We assume that @expected is already sorted.
+        int i = 0; // Index into @expected
         for (T s : actual) {
           boolean matchFound = false;
           for (; i < expectedValues.length; i++) {
@@ -234,8 +207,8 @@ public class SampleTest {
               break;
             }
           }
-          assertTrue("Invalid sample: " +  Joiner.on(',').join(actual), matchFound);
-          i++;  // Don't match the same element again.
+          assertTrue("Invalid sample: " + Joiner.on(',').join(actual), matchFound);
+          i++; // Don't match the same element again.
         }
         return null;
       }
@@ -246,15 +219,15 @@ public class SampleTest {
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSampleAny() {
       PCollection<Integer> input =
           pipeline
               .apply(
                   Create.timestamped(ImmutableList.of(tv(0), tv(1), tv(2), tv(3), tv(4), tv(5)))
                       .withCoder(BigEndianIntegerCoder.of()))
-              .apply(Window.<Integer>into(FixedWindows.of(Duration.standardSeconds(3))));
-      PCollection<Integer> output = input.apply(Sample.<Integer>any(2));
+              .apply(Window.into(FixedWindows.of(Duration.standardSeconds(3))));
+      PCollection<Integer> output = input.apply(Sample.any(2));
 
       PAssert.that(output)
           .inWindow(new IntervalWindow(new Instant(0), Duration.standardSeconds(3)))
@@ -266,27 +239,29 @@ public class SampleTest {
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSampleAnyEmpty() {
       PCollection<Integer> input = pipeline.apply(Create.empty(BigEndianIntegerCoder.of()));
-      PCollection<Integer> output = input
-          .apply(Window.<Integer>into(FixedWindows.of(Duration.standardSeconds(3))))
-          .apply(Sample.<Integer>any(2));
+      PCollection<Integer> output =
+          input
+              .apply(Window.into(FixedWindows.of(Duration.standardSeconds(3))))
+              .apply(Sample.any(2));
 
       PAssert.that(output).satisfies(new VerifyCorrectSample<>(0, EMPTY));
       pipeline.run();
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSampleAnyZero() {
       PCollection<Integer> input =
           pipeline.apply(
               Create.timestamped(ImmutableList.of(tv(0), tv(1), tv(2), tv(3), tv(4), tv(5)))
                   .withCoder(BigEndianIntegerCoder.of()));
-      PCollection<Integer> output = input
-          .apply(Window.<Integer>into(FixedWindows.of(Duration.standardSeconds(3))))
-          .apply(Sample.<Integer>any(0));
+      PCollection<Integer> output =
+          input
+              .apply(Window.into(FixedWindows.of(Duration.standardSeconds(3))))
+              .apply(Sample.any(0));
 
       PAssert.that(output)
           .inWindow(new IntervalWindow(new Instant(0), Duration.standardSeconds(3)))
@@ -298,12 +273,13 @@ public class SampleTest {
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSampleAnyInsufficientElements() {
       PCollection<Integer> input = pipeline.apply(Create.empty(BigEndianIntegerCoder.of()));
-      PCollection<Integer> output = input
-          .apply(Window.<Integer>into(FixedWindows.of(Duration.standardSeconds(3))))
-          .apply(Sample.<Integer>any(10));
+      PCollection<Integer> output =
+          input
+              .apply(Window.into(FixedWindows.of(Duration.standardSeconds(3))))
+              .apply(Sample.any(10));
 
       PAssert.that(output)
           .inWindow(new IntervalWindow(new Instant(0), Duration.standardSeconds(3)))
@@ -314,62 +290,56 @@ public class SampleTest {
     @Test(expected = IllegalArgumentException.class)
     public void testSampleAnyNegative() {
       pipeline.enableAbandonedNodeEnforcement(false);
-      pipeline.apply(Create.empty(BigEndianIntegerCoder.of())).apply(Sample.<Integer>any(-10));
+      pipeline.apply(Create.empty(BigEndianIntegerCoder.of())).apply(Sample.any(-10));
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSample() {
 
       PCollection<Integer> input =
           pipeline.apply(
               Create.of(ImmutableList.copyOf(DATA)).withCoder(BigEndianIntegerCoder.of()));
-      PCollection<Iterable<Integer>> output = input.apply(Sample.<Integer>fixedSizeGlobally(3));
+      PCollection<Iterable<Integer>> output = input.apply(Sample.fixedSizeGlobally(3));
 
-      PAssert.thatSingletonIterable(output)
-             .satisfies(new VerifyCorrectSample<>(3, DATA));
+      PAssert.thatSingletonIterable(output).satisfies(new VerifyCorrectSample<>(3, DATA));
       pipeline.run();
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSampleEmpty() {
 
       PCollection<Integer> input = pipeline.apply(Create.empty(BigEndianIntegerCoder.of()));
-      PCollection<Iterable<Integer>> output = input.apply(
-          Sample.<Integer>fixedSizeGlobally(3));
+      PCollection<Iterable<Integer>> output = input.apply(Sample.fixedSizeGlobally(3));
 
-      PAssert.thatSingletonIterable(output)
-             .satisfies(new VerifyCorrectSample<>(0, EMPTY));
+      PAssert.thatSingletonIterable(output).satisfies(new VerifyCorrectSample<>(0, EMPTY));
       pipeline.run();
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSampleZero() {
 
-      PCollection<Integer> input = pipeline.apply(Create.of(ImmutableList.copyOf(DATA))
-                                                        .withCoder(BigEndianIntegerCoder.of()));
-      PCollection<Iterable<Integer>> output = input.apply(
-          Sample.<Integer>fixedSizeGlobally(0));
+      PCollection<Integer> input =
+          pipeline.apply(
+              Create.of(ImmutableList.copyOf(DATA)).withCoder(BigEndianIntegerCoder.of()));
+      PCollection<Iterable<Integer>> output = input.apply(Sample.fixedSizeGlobally(0));
 
-      PAssert.thatSingletonIterable(output)
-             .satisfies(new VerifyCorrectSample<>(0, DATA));
+      PAssert.thatSingletonIterable(output).satisfies(new VerifyCorrectSample<>(0, DATA));
       pipeline.run();
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSampleInsufficientElements() {
 
       PCollection<Integer> input =
           pipeline.apply(
               Create.of(ImmutableList.copyOf(DATA)).withCoder(BigEndianIntegerCoder.of()));
-      PCollection<Iterable<Integer>> output = input.apply(
-          Sample.<Integer>fixedSizeGlobally(10));
+      PCollection<Iterable<Integer>> output = input.apply(Sample.fixedSizeGlobally(10));
 
-      PAssert.thatSingletonIterable(output)
-             .satisfies(new VerifyCorrectSample<>(5, DATA));
+      PAssert.thatSingletonIterable(output).satisfies(new VerifyCorrectSample<>(5, DATA));
       pipeline.run();
     }
 
@@ -380,22 +350,20 @@ public class SampleTest {
       PCollection<Integer> input =
           pipeline.apply(
               Create.of(ImmutableList.copyOf(DATA)).withCoder(BigEndianIntegerCoder.of()));
-      input.apply(Sample.<Integer>fixedSizeGlobally(-1));
+      input.apply(Sample.fixedSizeGlobally(-1));
     }
 
     @Test
-    @Category(ValidatesRunner.class)
+    @Category(NeedsRunner.class)
     public void testSampleMultiplicity() {
 
       PCollection<Integer> input =
           pipeline.apply(
               Create.of(ImmutableList.copyOf(REPEATED_DATA)).withCoder(BigEndianIntegerCoder.of()));
       // At least one value must be selected with multiplicity.
-      PCollection<Iterable<Integer>> output = input.apply(
-          Sample.<Integer>fixedSizeGlobally(6));
+      PCollection<Iterable<Integer>> output = input.apply(Sample.fixedSizeGlobally(6));
 
-      PAssert.thatSingletonIterable(output)
-             .satisfies(new VerifyCorrectSample<>(6, REPEATED_DATA));
+      PAssert.thatSingletonIterable(output).satisfies(new VerifyCorrectSample<>(6, REPEATED_DATA));
       pipeline.run();
     }
 

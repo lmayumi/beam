@@ -17,11 +17,8 @@
  */
 package org.apache.beam.sdk.io;
 
-import static com.google.common.base.MoreObjects.firstNonNull;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.MoreObjects.firstNonNull;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.MoreObjects;
-import com.google.common.base.Objects;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -47,6 +44,9 @@ import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo.Timing;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.MoreObjects;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Objects;
 
 /**
  * A default {@link FilenamePolicy} for windowed and unwindowed files. This policy is constructed
@@ -68,7 +68,7 @@ public final class DefaultFilenamePolicy extends FilenamePolicy {
    * write windowed files. In cases when user does specify shard template to be used then provided
    * template will be used for both windowed and non-windowed file names.
    */
-  private static final String DEFAULT_WINDOWED_SHARD_TEMPLATE =
+  public static final String DEFAULT_WINDOWED_SHARD_TEMPLATE =
       "W-P" + DEFAULT_UNWINDOWED_SHARD_TEMPLATE;
 
   /*
@@ -157,6 +157,7 @@ public final class DefaultFilenamePolicy extends FilenamePolicy {
           && shardTemplate.equals(other.shardTemplate)
           && suffix.equals(other.suffix);
     }
+
     @Override
     public String toString() {
       return MoreObjects.toStringHelper(this)

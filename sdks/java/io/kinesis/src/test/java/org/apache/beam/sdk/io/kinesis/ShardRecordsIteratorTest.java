@@ -25,22 +25,20 @@ import static org.mockito.Matchers.anyListOf;
 import static org.mockito.Mockito.when;
 
 import com.amazonaws.services.kinesis.model.ExpiredIteratorException;
-
 import java.io.IOException;
 import java.util.Collections;
-
+import org.joda.time.Duration;
+import org.joda.time.Instant;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.invocation.InvocationOnMock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.mockito.junit.MockitoJUnitRunner;
 import org.mockito.stubbing.Answer;
 
-/**
- * Tests {@link ShardRecordsIterator}.
- */
-@RunWith(MockitoJUnitRunner.class)
+/** Tests {@link ShardRecordsIterator}. */
+@RunWith(MockitoJUnitRunner.Silent.class)
 public class ShardRecordsIteratorTest {
 
   private static final String INITIAL_ITERATOR = "INITIAL_ITERATOR";
@@ -49,17 +47,13 @@ public class ShardRecordsIteratorTest {
   private static final String THIRD_ITERATOR = "THIRD_ITERATOR";
   private static final String STREAM_NAME = "STREAM_NAME";
   private static final String SHARD_ID = "SHARD_ID";
+  private static final Instant NOW = Instant.now();
 
-  @Mock
-  private SimplifiedKinesisClient kinesisClient;
-  @Mock
-  private ShardCheckpoint firstCheckpoint, aCheckpoint, bCheckpoint, cCheckpoint, dCheckpoint;
-  @Mock
-  private GetKinesisRecordsResult firstResult, secondResult, thirdResult;
-  @Mock
-  private KinesisRecord a, b, c, d;
-  @Mock
-  private RecordFilter recordFilter;
+  @Mock private SimplifiedKinesisClient kinesisClient;
+  @Mock private ShardCheckpoint firstCheckpoint, aCheckpoint, bCheckpoint, cCheckpoint, dCheckpoint;
+  @Mock private GetKinesisRecordsResult firstResult, secondResult, thirdResult;
+  @Mock private KinesisRecord a, b, c, d;
+  @Mock private RecordFilter recordFilter;
 
   private ShardRecordsIterator iterator;
 
@@ -82,45 +76,50 @@ public class ShardRecordsIteratorTest {
     when(dCheckpoint.getStreamName()).thenReturn(STREAM_NAME);
     when(dCheckpoint.getShardId()).thenReturn(SHARD_ID);
 
-    when(kinesisClient.getRecords(INITIAL_ITERATOR, STREAM_NAME, SHARD_ID))
-        .thenReturn(firstResult);
-    when(kinesisClient.getRecords(SECOND_ITERATOR, STREAM_NAME, SHARD_ID))
-        .thenReturn(secondResult);
-    when(kinesisClient.getRecords(THIRD_ITERATOR, STREAM_NAME, SHARD_ID))
-        .thenReturn(thirdResult);
+    when(kinesisClient.getRecords(INITIAL_ITERATOR, STREAM_NAME, SHARD_ID)).thenReturn(firstResult);
+    when(kinesisClient.getRecords(SECOND_ITERATOR, STREAM_NAME, SHARD_ID)).thenReturn(secondResult);
+    when(kinesisClient.getRecords(THIRD_ITERATOR, STREAM_NAME, SHARD_ID)).thenReturn(thirdResult);
 
     when(firstResult.getNextShardIterator()).thenReturn(SECOND_ITERATOR);
     when(secondResult.getNextShardIterator()).thenReturn(THIRD_ITERATOR);
     when(thirdResult.getNextShardIterator()).thenReturn(THIRD_ITERATOR);
 
-    when(firstResult.getRecords()).thenReturn(Collections.<KinesisRecord>emptyList());
-    when(secondResult.getRecords()).thenReturn(Collections.<KinesisRecord>emptyList());
-    when(thirdResult.getRecords()).thenReturn(Collections.<KinesisRecord>emptyList());
+    when(firstResult.getRecords()).thenReturn(Collections.emptyList());
+    when(secondResult.getRecords()).thenReturn(Collections.emptyList());
+    when(thirdResult.getRecords()).thenReturn(Collections.emptyList());
 
-    when(recordFilter.apply(anyListOf(KinesisRecord.class), any(ShardCheckpoint
-        .class))).thenAnswer(new IdentityAnswer());
+    when(recordFilter.apply(anyListOf(KinesisRecord.class), any(ShardCheckpoint.class)))
+        .thenAnswer(new IdentityAnswer());
 
-    iterator = new ShardRecordsIterator(firstCheckpoint, kinesisClient, recordFilter);
+    WatermarkPolicyFactory watermarkPolicyFactory = WatermarkPolicyFactory.withArrivalTimePolicy();
+    iterator =
+        new ShardRecordsIterator(
+            firstCheckpoint, kinesisClient, watermarkPolicyFactory, recordFilter);
   }
 
   @Test
-  public void goesThroughAvailableRecords() throws IOException, TransientKinesisException {
+  public void goesThroughAvailableRecords()
+      throws IOException, TransientKinesisException, KinesisShardClosedException {
     when(firstResult.getRecords()).thenReturn(asList(a, b, c));
     when(secondResult.getRecords()).thenReturn(singletonList(d));
-    when(thirdResult.getRecords()).thenReturn(Collections.<KinesisRecord>emptyList());
+    when(thirdResult.getRecords()).thenReturn(Collections.emptyList());
 
     assertThat(iterator.getCheckpoint()).isEqualTo(firstCheckpoint);
     assertThat(iterator.readNextBatch()).isEqualTo(asList(a, b, c));
     assertThat(iterator.readNextBatch()).isEqualTo(singletonList(d));
     assertThat(iterator.readNextBatch()).isEqualTo(Collections.emptyList());
-
   }
 
   @Test
   public void conformingRecordsMovesCheckpoint() throws IOException, TransientKinesisException {
     when(firstResult.getRecords()).thenReturn(asList(a, b, c));
     when(secondResult.getRecords()).thenReturn(singletonList(d));
-    when(thirdResult.getRecords()).thenReturn(Collections.<KinesisRecord>emptyList());
+    when(thirdResult.getRecords()).thenReturn(Collections.emptyList());
+
+    when(a.getApproximateArrivalTimestamp()).thenReturn(NOW);
+    when(b.getApproximateArrivalTimestamp()).thenReturn(NOW.plus(Duration.standardSeconds(1)));
+    when(c.getApproximateArrivalTimestamp()).thenReturn(NOW.plus(Duration.standardSeconds(2)));
+    when(d.getApproximateArrivalTimestamp()).thenReturn(NOW.plus(Duration.standardSeconds(3)));
 
     iterator.ackRecord(a);
     assertThat(iterator.getCheckpoint()).isEqualTo(aCheckpoint);
@@ -133,14 +132,17 @@ public class ShardRecordsIteratorTest {
   }
 
   @Test
-  public void refreshesExpiredIterator() throws IOException, TransientKinesisException {
+  public void refreshesExpiredIterator()
+      throws IOException, TransientKinesisException, KinesisShardClosedException {
     when(firstResult.getRecords()).thenReturn(singletonList(a));
     when(secondResult.getRecords()).thenReturn(singletonList(b));
 
+    when(a.getApproximateArrivalTimestamp()).thenReturn(NOW);
+    when(b.getApproximateArrivalTimestamp()).thenReturn(NOW.plus(Duration.standardSeconds(1)));
+
     when(kinesisClient.getRecords(SECOND_ITERATOR, STREAM_NAME, SHARD_ID))
         .thenThrow(ExpiredIteratorException.class);
-    when(aCheckpoint.getShardIterator(kinesisClient))
-        .thenReturn(SECOND_REFRESHED_ITERATOR);
+    when(aCheckpoint.getShardIterator(kinesisClient)).thenReturn(SECOND_REFRESHED_ITERATOR);
     when(kinesisClient.getRecords(SECOND_REFRESHED_ITERATOR, STREAM_NAME, SHARD_ID))
         .thenReturn(secondResult);
 

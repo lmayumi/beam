@@ -15,25 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.fn.harness.data;
 
-import io.grpc.ManagedChannel;
-import io.grpc.stub.StreamObserver;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.function.BiFunction;
 import java.util.function.Function;
-import org.apache.beam.fn.harness.fn.CloseableThrowingConsumer;
-import org.apache.beam.fn.harness.fn.ThrowingConsumer;
-import org.apache.beam.model.fnexecution.v1.BeamFnApi;
 import org.apache.beam.model.fnexecution.v1.BeamFnDataGrpc;
 import org.apache.beam.model.pipeline.v1.Endpoints;
+import org.apache.beam.model.pipeline.v1.Endpoints.ApiServiceDescriptor;
 import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.fn.data.BeamFnDataBufferingOutboundObserver;
+import org.apache.beam.sdk.fn.data.BeamFnDataGrpcMultiplexer;
+import org.apache.beam.sdk.fn.data.BeamFnDataInboundObserver;
+import org.apache.beam.sdk.fn.data.CloseableFnDataReceiver;
+import org.apache.beam.sdk.fn.data.FnDataReceiver;
+import org.apache.beam.sdk.fn.data.InboundDataClient;
+import org.apache.beam.sdk.fn.data.LogicalEndpoint;
+import org.apache.beam.sdk.fn.stream.OutboundObserverFactory;
 import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.util.WindowedValue;
-import org.apache.beam.sdk.values.KV;
+import org.apache.beam.vendor.grpc.v1p21p0.io.grpc.ManagedChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,21 +47,16 @@ public class BeamFnDataGrpcClient implements BeamFnDataClient {
 
   private final ConcurrentMap<Endpoints.ApiServiceDescriptor, BeamFnDataGrpcMultiplexer> cache;
   private final Function<Endpoints.ApiServiceDescriptor, ManagedChannel> channelFactory;
-  private final BiFunction<Function<StreamObserver<BeamFnApi.Elements>,
-                                    StreamObserver<BeamFnApi.Elements>>,
-                           StreamObserver<BeamFnApi.Elements>,
-                           StreamObserver<BeamFnApi.Elements>> streamObserverFactory;
+  private final OutboundObserverFactory outboundObserverFactory;
   private final PipelineOptions options;
 
   public BeamFnDataGrpcClient(
       PipelineOptions options,
       Function<Endpoints.ApiServiceDescriptor, ManagedChannel> channelFactory,
-      BiFunction<Function<StreamObserver<BeamFnApi.Elements>, StreamObserver<BeamFnApi.Elements>>,
-                 StreamObserver<BeamFnApi.Elements>,
-                 StreamObserver<BeamFnApi.Elements>> streamObserverFactory) {
+      OutboundObserverFactory outboundObserverFactory) {
     this.options = options;
     this.channelFactory = channelFactory;
-    this.streamObserverFactory = streamObserverFactory;
+    this.outboundObserverFactory = outboundObserverFactory;
     this.cache = new ConcurrentHashMap<>();
   }
 
@@ -74,20 +69,21 @@ public class BeamFnDataGrpcClient implements BeamFnDataClient {
    * (signaled by an empty data block), the returned future is completed successfully.
    */
   @Override
-  public <T> CompletableFuture<Void> forInboundConsumer(
-      Endpoints.ApiServiceDescriptor apiServiceDescriptor,
-      KV<String, BeamFnApi.Target> inputLocation,
-      Coder<WindowedValue<T>> coder,
-      ThrowingConsumer<WindowedValue<T>> consumer) {
-    LOG.debug("Registering consumer for instruction {} and target {}",
-        inputLocation.getKey(),
-        inputLocation.getValue());
+  public <T> InboundDataClient receive(
+      ApiServiceDescriptor apiServiceDescriptor,
+      LogicalEndpoint inputLocation,
+      Coder<T> coder,
+      FnDataReceiver<T> consumer) {
+    LOG.debug(
+        "Registering consumer for instruction {} and transform {}",
+        inputLocation.getInstructionId(),
+        inputLocation.getTransformId());
 
-    CompletableFuture<Void> readFuture = new CompletableFuture<>();
     BeamFnDataGrpcMultiplexer client = getClientFor(apiServiceDescriptor);
-    client.futureForKey(inputLocation).complete(
-        new BeamFnDataInboundObserver<>(coder, consumer, readFuture));
-    return readFuture;
+    BeamFnDataInboundObserver<T> inboundObserver =
+        BeamFnDataInboundObserver.forConsumer(coder, consumer);
+    client.registerConsumer(inputLocation, inboundObserver);
+    return inboundObserver;
   }
 
   /**
@@ -95,32 +91,34 @@ public class BeamFnDataGrpcClient implements BeamFnDataClient {
    *
    * <p>The provided coder is used to encode elements on the outbound stream.
    *
-   * <p>On closing the returned consumer, an empty data block is sent as a signal of the
-   * logical data stream finishing.
+   * <p>On closing the returned consumer, an empty data block is sent as a signal of the logical
+   * data stream finishing.
    *
    * <p>The returned closeable consumer is not thread safe.
    */
   @Override
-  public <T> CloseableThrowingConsumer<WindowedValue<T>> forOutboundConsumer(
+  public <T> CloseableFnDataReceiver<T> send(
       Endpoints.ApiServiceDescriptor apiServiceDescriptor,
-      KV<String, BeamFnApi.Target> outputLocation,
-      Coder<WindowedValue<T>> coder) {
+      LogicalEndpoint outputLocation,
+      Coder<T> coder) {
     BeamFnDataGrpcMultiplexer client = getClientFor(apiServiceDescriptor);
 
-    LOG.debug("Creating output consumer for instruction {} and target {}",
-        outputLocation.getKey(),
-        outputLocation.getValue());
-    return new BeamFnDataBufferingOutboundObserver<>(
+    LOG.debug(
+        "Creating output consumer for instruction {} and transform {}",
+        outputLocation.getInstructionId(),
+        outputLocation.getTransformId());
+    return BeamFnDataBufferingOutboundObserver.forLocation(
         options, outputLocation, coder, client.getOutboundObserver());
   }
 
   private BeamFnDataGrpcMultiplexer getClientFor(
       Endpoints.ApiServiceDescriptor apiServiceDescriptor) {
-    return cache.computeIfAbsent(apiServiceDescriptor,
-        (Endpoints.ApiServiceDescriptor descriptor) -> new BeamFnDataGrpcMultiplexer(
-            descriptor,
-            (StreamObserver<BeamFnApi.Elements> inboundObserver) -> streamObserverFactory.apply(
-                BeamFnDataGrpc.newStub(channelFactory.apply(apiServiceDescriptor))::data,
-                inboundObserver)));
+    return cache.computeIfAbsent(
+        apiServiceDescriptor,
+        (Endpoints.ApiServiceDescriptor descriptor) ->
+            new BeamFnDataGrpcMultiplexer(
+                descriptor,
+                outboundObserverFactory,
+                BeamFnDataGrpc.newStub(channelFactory.apply(apiServiceDescriptor))::data));
   }
 }

@@ -17,16 +17,24 @@
 
 """Unit tests for side inputs."""
 
+from __future__ import absolute_import
+
 import logging
 import unittest
 
 from nose.plugins.attrib import attr
 
 import apache_beam as beam
+from apache_beam.options.pipeline_options import StandardOptions
 from apache_beam.testing.test_pipeline import TestPipeline
+from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that
 from apache_beam.testing.util import equal_to
+from apache_beam.testing.util import equal_to_per_window
+from apache_beam.transforms import Map
+from apache_beam.transforms import trigger
 from apache_beam.transforms import window
+from apache_beam.utils.timestamp import Timestamp
 
 
 class SideInputsTest(unittest.TestCase):
@@ -146,7 +154,9 @@ class SideInputsTest(unittest.TestCase):
     assert_that(result, equal_to([(1, 'empty'), (2, 'empty')]))
     pipeline.run()
 
-  @attr('ValidatesRunner')
+  # TODO(BEAM-5025): Disable this test in streaming temporarily.
+  # Remove sickbay-streaming tag after it's fixed.
+  @attr('ValidatesRunner', 'sickbay-streaming')
   def test_multi_valued_singleton_side_input(self):
     pipeline = self.create_pipeline()
     pcol = pipeline | 'start' >> beam.Create([1, 2])
@@ -194,7 +204,7 @@ class SideInputsTest(unittest.TestCase):
         [[actual_elem, actual_list, actual_dict]] = actual
         equal_to([expected_elem])([actual_elem])
         equal_to(expected_list)(actual_list)
-        equal_to(expected_pairs)(actual_dict.iteritems())
+        equal_to(expected_pairs)(actual_dict.items())
       return match
 
     assert_that(results, matcher(1, a_list, some_pairs))
@@ -284,8 +294,8 @@ class SideInputsTest(unittest.TestCase):
       def match(actual):
         [[actual_elem, actual_dict1, actual_dict2]] = actual
         equal_to([expected_elem])([actual_elem])
-        equal_to(expected_kvs)(actual_dict1.iteritems())
-        equal_to(expected_kvs)(actual_dict2.iteritems())
+        equal_to(expected_kvs)(actual_dict1.items())
+        equal_to(expected_kvs)(actual_dict2.items())
       return match
 
     assert_that(results, matcher(1, some_kvs))
@@ -305,6 +315,65 @@ class SideInputsTest(unittest.TestCase):
     assert_that(results, equal_to(['a', 'b']))
     pipeline.run()
 
+  @attr('ValidatesRunner')
+  def test_multi_triggered_gbk_side_input(self):
+    """Test a GBK sideinput, with multiple triggering."""
+    options = StandardOptions(streaming=True)
+    p = TestPipeline(options=options)
+
+    test_stream = (p
+                   | 'Mixed TestStream' >> TestStream()
+                   .advance_watermark_to(3, tag='main')
+                   .add_elements(['a1'], tag='main')
+                   .advance_watermark_to(8, tag='main')
+                   .add_elements(['a2'], tag='main')
+                   .add_elements([window.TimestampedValue(('k', 100), 2)],
+                                 tag='side')
+                   .add_elements([window.TimestampedValue(('k', 400), 7)],
+                                 tag='side')
+                   .advance_watermark_to_infinity(tag='main')
+                   .advance_watermark_to_infinity(tag='side'))
+
+    main_data = (test_stream['main']
+                 | 'Main windowInto' >> beam.WindowInto(
+                     window.FixedWindows(5),
+                     accumulation_mode=trigger.AccumulationMode.DISCARDING))
+
+    side_data = (test_stream['side']
+                 | 'Side windowInto' >> beam.WindowInto(
+                     window.FixedWindows(5),
+                     trigger=trigger.AfterWatermark(
+                         early=trigger.AfterCount(1)),
+                     accumulation_mode=trigger.AccumulationMode.DISCARDING)
+                 | beam.CombinePerKey(sum)
+                 | 'Values' >> Map(lambda k_vs: k_vs[1]))
+
+    class RecordFn(beam.DoFn):
+      def process(self,
+                  elm=beam.DoFn.ElementParam,
+                  ts=beam.DoFn.TimestampParam,
+                  side=beam.DoFn.SideInputParam):
+        yield (elm, ts, side)
+
+    records = (main_data
+               | beam.ParDo(RecordFn(), beam.pvalue.AsList(side_data)))
+
+    expected_window_to_elements = {
+        window.IntervalWindow(0, 5): [
+            ('a1', Timestamp(3), [100, 0]),
+        ],
+        window.IntervalWindow(5, 10): [
+            ('a2', Timestamp(8), [400, 0])
+        ],
+    }
+
+    assert_that(
+        records,
+        equal_to_per_window(expected_window_to_elements),
+        use_global_window=False,
+        label='assert per window')
+
+    p.run()
 
 if __name__ == '__main__':
   logging.getLogger().setLevel(logging.DEBUG)

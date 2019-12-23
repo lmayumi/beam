@@ -41,8 +41,16 @@ from __future__ import absolute_import
 import calendar
 import inspect
 import json
+from builtins import object
 from datetime import datetime
 from datetime import timedelta
+from typing import TYPE_CHECKING
+from typing import List
+
+from past.builtins import unicode
+
+if TYPE_CHECKING:
+  from apache_beam.options.pipeline_options import PipelineOptions
 
 __all__ = ['HasDisplayData', 'DisplayDataItem', 'DisplayData']
 
@@ -54,6 +62,7 @@ class HasDisplayData(object):
   """
 
   def display_data(self):
+    # type: () -> dict
     """ Returns the display data associated to a pipeline component.
 
     It should be reimplemented in pipeline components that wish to have
@@ -77,6 +86,7 @@ class HasDisplayData(object):
     return {}
 
   def _namespace(self):
+    # type: () -> str
     return '{}.{}'.format(self.__module__, self.__class__.__name__)
 
 
@@ -84,9 +94,13 @@ class DisplayData(object):
   """ Static display data associated with a pipeline component.
   """
 
-  def __init__(self, namespace, display_data_dict):
+  def __init__(self,
+               namespace,  # type: str
+               display_data_dict  # type: dict
+              ):
+    # type: (...) -> None
     self.namespace = namespace
-    self.items = []
+    self.items = []  # type: List[DisplayDataItem]
     self._populate_items(display_data_dict)
 
   def _populate_items(self, display_data_dict):
@@ -188,6 +202,7 @@ class DisplayDataItem(object):
     self._drop_if_default = False
 
   def drop_if_none(self):
+    # type: () -> DisplayDataItem
     """ The item should be dropped if its value is None.
 
     Returns:
@@ -197,6 +212,7 @@ class DisplayDataItem(object):
     return self
 
   def drop_if_default(self, default):
+    # type: (...) -> DisplayDataItem
     """ The item should be dropped if its value is equal to its default.
 
     Returns:
@@ -207,6 +223,7 @@ class DisplayDataItem(object):
     return self
 
   def should_drop(self):
+    # type: () -> bool
     """ Return True if the item should be dropped, or False if it should not
     be dropped. This depends on the drop_if_none, and drop_if_default calls.
 
@@ -220,6 +237,7 @@ class DisplayDataItem(object):
     return False
 
   def is_valid(self):
+    # type: () -> None
     """ Checks that all the necessary fields of the :class:`DisplayDataItem`
     are filled in. It checks that neither key, namespace, value or type are
     :data:`None`.
@@ -229,11 +247,14 @@ class DisplayDataItem(object):
         value or type.
     """
     if self.key is None:
-      raise ValueError('Invalid DisplayDataItem. Key must not be None')
+      raise ValueError(
+          'Invalid DisplayDataItem %s. Key must not be None.' % self)
     if self.namespace is None:
-      raise ValueError('Invalid DisplayDataItem. Namespace must not be None')
+      raise ValueError(
+          'Invalid DisplayDataItem %s. Namespace must not be None' % self)
     if self.value is None:
-      raise ValueError('Invalid DisplayDataItem. Value must not be None')
+      raise ValueError(
+          'Invalid DisplayDataItem %s. Value must not be None' % self)
     if self.type is None:
       raise ValueError(
           'Invalid DisplayDataItem. Value {} is of an unsupported type.'
@@ -255,6 +276,7 @@ class DisplayDataItem(object):
     return res
 
   def get_dict(self):
+    # type: () -> dict
     """ Returns the internal-API dictionary representing the
     :class:`DisplayDataItem`.
 
@@ -277,6 +299,7 @@ class DisplayDataItem(object):
     return False
 
   def __ne__(self, other):
+    # TODO(BEAM-5949): Needed for Python 2 compatibility.
     return not self == other
 
   def __hash__(self):

@@ -28,27 +28,67 @@ The pickler module should be used to pickle functions and modules; for values,
 the coders.*PickleCoder classes should be used instead.
 """
 
+from __future__ import absolute_import
+
 import base64
 import logging
 import sys
+import threading
 import traceback
 import types
 import zlib
+from typing import Any
+from typing import Dict
+from typing import Tuple
 
 import dill
+
+
+class _NoOpContextManager(object):
+  def __enter__(self):
+    pass
+
+  def __exit__(self, *unused_exc_info):
+    pass
+
+
+if sys.version_info[0] > 2:
+  # Pickling, especially unpickling, causes broken module imports on Python 3
+  # if executed concurrently, see: BEAM-8651, http://bugs.python.org/issue38884.
+  pickle_lock_unless_py2 = threading.RLock()
+else:
+  # Avoid slow reentrant locks on Py2. See: https://bugs.python.org/issue3001.
+  pickle_lock_unless_py2 = _NoOpContextManager()
+# Dill 0.28.0 renamed dill.dill to dill._dill:
+# https://github.com/uqfoundation/dill/commit/f0972ecc7a41d0b8acada6042d557068cac69baa
+# TODO: Remove this once Beam depends on dill >= 0.2.8
+if not getattr(dill, 'dill', None):
+  dill.dill = dill._dill
+  sys.modules['dill.dill'] = dill._dill
+
+# TODO: Remove once Dataflow has containers with a preinstalled dill >= 0.2.8
+if not getattr(dill, '_dill', None):
+  dill._dill = dill.dill
+  sys.modules['dill._dill'] = dill.dill
 
 
 def _is_nested_class(cls):
   """Returns true if argument is a class object that appears to be nested."""
   return (isinstance(cls, type)
-          and cls.__module__ != '__builtin__'
+          and cls.__module__ != 'builtins'     # Python 3
+          and cls.__module__ != '__builtin__'  # Python 2
           and cls.__name__ not in sys.modules[cls.__module__].__dict__)
 
 
 def _find_containing_class(nested_class):
-  """Finds containing class of a nestec class passed as argument."""
+  """Finds containing class of a nested class passed as argument."""
+
+  seen = set()
 
   def _find_containing_class_inner(outer):
+    if outer in seen:
+      return None
+    seen.add(outer)
     for k, v in outer.__dict__.items():
       if v is nested_class:
         return outer, k
@@ -137,16 +177,29 @@ if 'save_module' in dir(dill.dill):
   # Pickle module dictionaries (commonly found in lambda's globals)
   # by referencing their module.
   old_save_module_dict = dill.dill.save_module_dict
-  known_module_dicts = {}
+  known_module_dicts = {}  # type: Dict[int, Tuple[types.ModuleType, Dict[str, Any]]]
 
   @dill.dill.register(dict)
   def new_save_module_dict(pickler, obj):
     obj_id = id(obj)
     if not known_module_dicts or '__file__' in obj or '__package__' in obj:
       if obj_id not in known_module_dicts:
+        # Trigger loading of lazily loaded modules (such as pytest vendored
+        # modules).
+        # This first pass over sys.modules needs to iterate on a copy of
+        # sys.modules since lazy loading modifies the dictionary, hence the use
+        # of list().
+        for m in list(sys.modules.values()):
+          try:
+            _ = m.__dict__
+          except AttributeError:
+            pass
+
         for m in sys.modules.values():
           try:
-            if m and m.__name__ != '__main__':
+            if (m
+                and m.__name__ != '__main__'
+                and isinstance(m, dill.dill.ModuleType)):
               d = m.__dict__
               known_module_dicts[id(d)] = m, d
           except AttributeError:
@@ -164,6 +217,13 @@ if 'save_module' in dir(dill.dill):
     else:
       return old_save_module_dict(pickler, obj)
   dill.dill.save_module_dict = new_save_module_dict
+
+  if hasattr(types, "MappingProxyType"):
+    @dill.dill.register(types.MappingProxyType)
+    def save_mappingproxy(pickler, obj):
+      # pickling mappingproxy AS IS, not as dict
+      # inspired from https://github.com/cloudpipe/cloudpickle/pull/245
+      pickler.save_reduce(types.MappingProxyType, (dict(obj),), obj=obj)
 
   def _nest_dill_logging():
     """Prefix all dill logging with its depth in the callstack.
@@ -187,18 +247,19 @@ logging.getLogger('dill').setLevel(logging.WARN)
 # pickler.loads() being used for data, which results in an unnecessary base64
 # encoding.  This should be cleaned up.
 def dumps(o, enable_trace=True):
+  # type: (...) -> bytes
   """For internal use only; no backwards-compatibility guarantees."""
-
-  try:
-    s = dill.dumps(o)
-  except Exception:      # pylint: disable=broad-except
-    if enable_trace:
-      dill.dill._trace(True)  # pylint: disable=protected-access
+  with pickle_lock_unless_py2:
+    try:
       s = dill.dumps(o)
-    else:
-      raise
-  finally:
-    dill.dill._trace(False)  # pylint: disable=protected-access
+    except Exception:      # pylint: disable=broad-except
+      if enable_trace:
+        dill.dill._trace(True)  # pylint: disable=protected-access
+        s = dill.dumps(o)
+      else:
+        raise
+    finally:
+      dill.dill._trace(False)  # pylint: disable=protected-access
 
   # Compress as compactly as possible to decrease peak memory usage (of multiple
   # in-memory copies) and free up some possibly large and no-longer-needed
@@ -217,16 +278,17 @@ def loads(encoded, enable_trace=True):
   s = zlib.decompress(c)
   del c  # Free up some possibly large and no-longer-needed memory.
 
-  try:
-    return dill.loads(s)
-  except Exception:          # pylint: disable=broad-except
-    if enable_trace:
-      dill.dill._trace(True)   # pylint: disable=protected-access
+  with pickle_lock_unless_py2:
+    try:
       return dill.loads(s)
-    else:
-      raise
-  finally:
-    dill.dill._trace(False)  # pylint: disable=protected-access
+    except Exception:          # pylint: disable=broad-except
+      if enable_trace:
+        dill.dill._trace(True)   # pylint: disable=protected-access
+        return dill.loads(s)
+      else:
+        raise
+    finally:
+      dill.dill._trace(False)  # pylint: disable=protected-access
 
 
 def dump_session(file_path):
@@ -238,10 +300,12 @@ def dump_session(file_path):
   create and load the dump twice to have consistent results in the worker and
   the running session. Check: https://github.com/uqfoundation/dill/issues/195
   """
-  dill.dump_session(file_path)
-  dill.load_session(file_path)
-  return dill.dump_session(file_path)
+  with pickle_lock_unless_py2:
+    dill.dump_session(file_path)
+    dill.load_session(file_path)
+    return dill.dump_session(file_path)
 
 
 def load_session(file_path):
-  return dill.load_session(file_path)
+  with pickle_lock_unless_py2:
+    return dill.load_session(file_path)

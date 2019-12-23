@@ -15,10 +15,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.core.construction;
 
-import com.google.common.annotations.VisibleForTesting;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.beam.sdk.Pipeline;
@@ -33,6 +31,7 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PValue;
 import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
 
 /**
  * A {@link PTransformOverrideFactory} that will apply a flatten where no element appears in the
@@ -53,7 +52,7 @@ public class DeduplicatedFlattenFactory<T>
       AppliedPTransform<PCollectionList<T>, PCollection<T>, PCollections<T>> transform) {
     return PTransformReplacement.of(
         getInput(transform.getInputs(), transform.getPipeline()),
-        new FlattenWithoutDuplicateInputs<T>());
+        new FlattenWithoutDuplicateInputs<>());
   }
 
   /**
@@ -95,11 +94,11 @@ public class DeduplicatedFlattenFactory<T>
           PCollection<T> duplicated =
               instanceEntry
                   .getKey()
-                  .apply(duplicationName, ParDo.of(new DuplicateFn<T>(instanceEntry.getValue())));
+                  .apply(duplicationName, ParDo.of(new DuplicateFn<>(instanceEntry.getValue())));
           output = output.and(duplicated);
         }
       }
-      return output.apply(Flatten.<T>pCollections());
+      return output.apply(Flatten.pCollections());
     }
   }
 

@@ -16,25 +16,19 @@
  * limitations under the License.
  */
 
-apply from: project(":").file("build_rules.gradle")
-applyJavaNature()
+plugins { id 'org.apache.beam.module' }
+applyJavaNature(automaticModuleName: 'org.apache.beam.sdk.io.hadoop.common')
 
 description = "Apache Beam :: SDKs :: Java :: IO :: Hadoop Common"
+ext.summary = "Library to add shared Hadoop classes among Beam IOs."
 
 dependencies {
-  shadow project(path: ":beam-sdks-parent:beam-sdks-java-parent:beam-sdks-java-core", configuration: "shadow")
-  shadow library.java.findbugs_jsr305
+  compile project(path: ":sdks:java:core", configuration: "shadow")
   provided library.java.hadoop_client
   provided library.java.hadoop_common
   provided library.java.hadoop_mapreduce_client_core
   testCompile library.java.commons_lang3
   testCompile library.java.hamcrest_core
+  testCompile library.java.hamcrest_library
   testCompile library.java.junit
 }
-
-task packageTests(type: Jar) {
-  from sourceSets.test.output
-  classifier = "tests"
-}
-
-artifacts.archives packageTests

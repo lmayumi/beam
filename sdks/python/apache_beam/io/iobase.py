@@ -29,13 +29,27 @@ returns a writer object supporting writing records of serialized data to
 the sink.
 """
 
+from __future__ import absolute_import
+from __future__ import division
+
 import logging
+import math
 import random
+import threading
 import uuid
+from builtins import object
+from builtins import range
 from collections import namedtuple
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Iterator
+from typing import Optional
+from typing import Tuple
 
 from apache_beam import coders
 from apache_beam import pvalue
+from apache_beam.portability import common_urns
+from apache_beam.portability import python_urns
 from apache_beam.portability.api import beam_runner_api_pb2
 from apache_beam.pvalue import AsIter
 from apache_beam.pvalue import AsSingleton
@@ -44,10 +58,20 @@ from apache_beam.transforms import ptransform
 from apache_beam.transforms import window
 from apache_beam.transforms.display import DisplayDataItem
 from apache_beam.transforms.display import HasDisplayData
+from apache_beam.utils import timestamp
 from apache_beam.utils import urns
 from apache_beam.utils.windowed_value import WindowedValue
 
-__all__ = ['BoundedSource', 'RangeTracker', 'Read', 'Sink', 'Write', 'Writer']
+if TYPE_CHECKING:
+  from apache_beam.io import restriction_trackers
+  from apache_beam.runners.pipeline_context import PipelineContext
+  from apache_beam.utils.timestamp import Timestamp
+
+__all__ = ['BoundedSource', 'RangeTracker', 'Read', 'RestrictionTracker',
+           'Sink', 'Write', 'Writer']
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # Encapsulates information about a bundle of a source generated when method
@@ -74,7 +98,11 @@ SourceBundle = namedtuple(
 class SourceBase(HasDisplayData, urns.RunnerApiFn):
   """Base class for all sources that can be passed to beam.io.Read(...).
   """
-  urns.RunnerApiFn.register_pickle_urn(urns.PICKLED_SOURCE)
+  urns.RunnerApiFn.register_pickle_urn(python_urns.PICKLED_SOURCE)
+
+  def is_bounded(self):
+    # type: () -> bool
+    raise NotImplementedError
 
 
 class BoundedSource(SourceBase):
@@ -114,6 +142,7 @@ class BoundedSource(SourceBase):
   """
 
   def estimate_size(self):
+    # type: () -> Optional[int]
     """Estimates the size of source in bytes.
 
     An estimate of the total size (in bytes) of the data that would be read
@@ -126,7 +155,12 @@ class BoundedSource(SourceBase):
     """
     raise NotImplementedError
 
-  def split(self, desired_bundle_size, start_position=None, stop_position=None):
+  def split(self,
+            desired_bundle_size,  # type: int
+            start_position=None,  # type: Optional[Any]
+            stop_position=None,  # type: Optional[Any]
+           ):
+    # type: (...) -> Iterator[SourceBundle]
     """Splits the source into a set of bundles.
 
     Bundles should be approximately of size ``desired_bundle_size`` bytes.
@@ -143,7 +177,11 @@ class BoundedSource(SourceBase):
     """
     raise NotImplementedError
 
-  def get_range_tracker(self, start_position, stop_position):
+  def get_range_tracker(self,
+                        start_position,  # type: Optional[Any]
+                        stop_position,  # type: Optional[Any]
+                       ):
+    # type: (...) -> RangeTracker
     """Returns a RangeTracker for a given position range.
 
     Framework may invoke ``read()`` method with the RangeTracker object returned
@@ -426,7 +464,7 @@ class RangeTracker(object):
 
     Returns:
       the approximate fraction of positions that have been consumed by
-      successful 'try_split()' and  'report_current_position()'  calls, or
+      successful 'try_split()' and  'try_claim()'  calls, or
       0.0 if no such calls have happened.
     """
     raise NotImplementedError
@@ -611,10 +649,13 @@ class Sink(HasDisplayData):
 
   **Execution of the Write transform**
 
-  ``initialize_write()`` and ``finalize_write()`` are conceptually called once:
-  at the beginning and end of a ``Write`` transform. However, implementors must
+  ``initialize_write()``, ``pre_finalize()``, and ``finalize_write()`` are
+  conceptually called once. However, implementors must
   ensure that these methods are *idempotent*, as they may be called multiple
-  times on different machines in the case of failure/retry or for redundancy.
+  times on different machines in the case of failure/retry. A method may be
+  called more than once concurrently, in which case it's okay to have a
+  transient failure (such as due to a race condition). This failure should not
+  prevent subsequent retries from succeeding.
 
   ``initialize_write()`` should perform any initialization that needs to be done
   prior to writing to the sink. ``initialize_write()`` may return a result
@@ -638,9 +679,8 @@ class Sink(HasDisplayData):
   encoding of the unique bundle id. For example, if each bundle is written to a
   unique temporary file, ``close()`` method may return an object that contains
   the temporary file name. After writing of all bundles is complete, execution
-  engine will invoke ``finalize_write()`` implementation. As parameters to this
-  invocation execution engine will provide ``init_result`` as well as an
-  iterable of ``write_result``.
+  engine will invoke ``pre_finalize()`` and then ``finalize_write()``
+  implementation.
 
   The execution of a write transform can be illustrated using following pseudo
   code (assume that the outer for loop happens in parallel across many
@@ -653,7 +693,8 @@ class Sink(HasDisplayData):
       for elem in bundle:
         writer.write(elem)
       write_results.append(writer.close())
-    sink.finalize_write(init_result, write_results)
+    pre_finalize_result = sink.pre_finalize(init_result, write_results)
+    sink.finalize_write(init_result, write_results, pre_finalize_result)
 
 
   **init_result**
@@ -734,7 +775,27 @@ class Sink(HasDisplayData):
     """
     raise NotImplementedError
 
-  def finalize_write(self, init_result, writer_results):
+  def pre_finalize(self, init_result, writer_results):
+    """Pre-finalization stage for sink.
+
+    Called after all bundle writes are complete and before finalize_write.
+    Used to setup and verify filesystem and sink states.
+
+    Args:
+      init_result: the result of ``initialize_write()`` invocation.
+      writer_results: an iterable containing results of ``Writer.close()``
+        invocations. This will only contain results of successful writes, and
+        will only contain the result of a single successful write for a given
+        bundle.
+
+    Returns:
+      An object that contains any sink specific state generated.
+      This object will be passed to finalize_write().
+    """
+    raise NotImplementedError
+
+  def finalize_write(self, init_result, writer_results,
+                     pre_finalize_result):
     """Finalizes the sink after all data is written to it.
 
     Given the result of initialization and an iterable of results from bundle
@@ -766,6 +827,7 @@ class Sink(HasDisplayData):
         invocations. This will only contain results of successful writes, and
         will only contain the result of a single successful write for a given
         bundle.
+      pre_finalize_result: the result of ``pre_finalize()`` invocation.
     """
     raise NotImplementedError
 
@@ -803,6 +865,7 @@ class Read(ptransform.PTransform):
   """A transform that reads a PCollection."""
 
   def __init__(self, source):
+    # type: (SourceBase) -> None
     """Initializes a Read transform.
 
     Args:
@@ -811,15 +874,29 @@ class Read(ptransform.PTransform):
     super(Read, self).__init__()
     self.source = source
 
+  @staticmethod
+  def get_desired_chunk_size(total_size):
+    if total_size:
+      # 1MB = 1 shard, 1GB = 32 shards, 1TB = 1000 shards, 1PB = 32k shards
+      chunk_size = max(1 << 20, 1000 * int(math.sqrt(total_size)))
+    else:
+      chunk_size = 64 << 20  # 64mb
+    return chunk_size
+
   def expand(self, pbegin):
-    assert isinstance(pbegin, pvalue.PBegin)
-    self.pipeline = pbegin.pipeline
-    return pvalue.PCollection(self.pipeline)
+    if isinstance(self.source, BoundedSource):
+      return pbegin | _SDFBoundedSourceWrapper(self.source)
+    else:
+      # Treat Read itself as a primitive.
+      return pvalue.PCollection(pbegin.pipeline,
+                                is_bounded=self.source.is_bounded())
 
   def get_windowing(self, unused_inputs):
+    # type: (...) -> core.Windowing
     return core.Windowing(window.GlobalWindows())
 
   def _infer_output_coder(self, input_type=None, input_coder=None):
+    # type: (...) -> Optional[coders.Coder]
     if isinstance(self.source, BoundedSource):
       return self.source.default_output_coder()
     else:
@@ -831,7 +908,8 @@ class Read(ptransform.PTransform):
             'source_dd': self.source}
 
   def to_runner_api_parameter(self, context):
-    return (urns.READ_TRANSFORM,
+    # type: (PipelineContext) -> Tuple[str, beam_runner_api_pb2.ReadPayload]
+    return (common_urns.deprecated_primitives.READ.urn,
             beam_runner_api_pb2.ReadPayload(
                 source=self.source.to_runner_api(context),
                 is_bounded=beam_runner_api_pb2.IsBounded.BOUNDED
@@ -840,11 +918,12 @@ class Read(ptransform.PTransform):
 
   @staticmethod
   def from_runner_api_parameter(parameter, context):
+    # type: (beam_runner_api_pb2.ReadPayload, PipelineContext) -> Read
     return Read(SourceBase.from_runner_api(parameter.source, context))
 
 
 ptransform.PTransform.register_urn(
-    urns.READ_TRANSFORM,
+    common_urns.deprecated_primitives.READ.urn,
     beam_runner_api_pb2.ReadPayload,
     Read.from_runner_api_parameter)
 
@@ -903,13 +982,14 @@ class Write(ptransform.PTransform):
       return pcoll | self.sink
     else:
       raise ValueError('A sink must inherit iobase.Sink, iobase.NativeSink, '
-                       'or be a PTransform. Received : %r', self.sink)
+                       'or be a PTransform. Received : %r' % self.sink)
 
 
 class WriteImpl(ptransform.PTransform):
   """Implements the writing of custom sinks."""
 
   def __init__(self, sink):
+    # type: (Sink) -> None
     super(WriteImpl, self).__init__()
     self.sink = sink
 
@@ -939,12 +1019,20 @@ class WriteImpl(ptransform.PTransform):
                            | core.WindowInto(window.GlobalWindows())
                            | core.GroupByKey()
                            | 'Extract' >> core.FlatMap(lambda x: x[1]))
+    # PreFinalize should run before FinalizeWrite, and the two should not be
+    # fused.
+    pre_finalize_coll = do_once | 'PreFinalize' >> core.FlatMap(
+        _pre_finalize,
+        self.sink,
+        AsSingleton(init_result_coll),
+        AsIter(write_result_coll))
     return do_once | 'FinalizeWrite' >> core.FlatMap(
         _finalize_write,
         self.sink,
         AsSingleton(init_result_coll),
         AsIter(write_result_coll),
-        min_shards)
+        min_shards,
+        AsSingleton(pre_finalize_coll))
 
 
 class _WriteBundleDoFn(core.DoFn):
@@ -953,20 +1041,24 @@ class _WriteBundleDoFn(core.DoFn):
   """
 
   def __init__(self, sink):
-    self.writer = None
     self.sink = sink
 
   def display_data(self):
     return {'sink_dd': self.sink}
 
+  def start_bundle(self):
+    self.writer = None
+
   def process(self, element, init_result):
     if self.writer is None:
+      # We ignore UUID collisions here since they are extremely rare.
       self.writer = self.sink.open_writer(init_result, str(uuid.uuid4()))
     self.writer.write(element)
 
   def finish_bundle(self):
     if self.writer is not None:
-      yield WindowedValue(self.writer.close(), window.MAX_TIMESTAMP,
+      yield WindowedValue(self.writer.close(),
+                          window.GlobalWindow().max_timestamp(),
                           [window.GlobalWindow()])
 
 
@@ -983,26 +1075,34 @@ class _WriteKeyedBundleDoFn(core.DoFn):
     writer = self.sink.open_writer(init_result, str(uuid.uuid4()))
     for e in bundle[1]:  # values
       writer.write(e)
-    return [window.TimestampedValue(writer.close(), window.MAX_TIMESTAMP)]
+    return [window.TimestampedValue(writer.close(), timestamp.MAX_TIMESTAMP)]
 
 
-def _finalize_write(_, sink, init_result, write_results, min_shards):
+def _pre_finalize(unused_element, sink, init_result, write_results):
+  return sink.pre_finalize(init_result, write_results)
+
+
+def _finalize_write(unused_element, sink, init_result, write_results,
+                    min_shards, pre_finalize_results):
   write_results = list(write_results)
   extra_shards = []
   if len(write_results) < min_shards:
-    logging.debug(
+    _LOGGER.debug(
         'Creating %s empty shard(s).', min_shards - len(write_results))
     for _ in range(min_shards - len(write_results)):
       writer = sink.open_writer(init_result, str(uuid.uuid4()))
       extra_shards.append(writer.close())
-  outputs = sink.finalize_write(init_result, write_results + extra_shards)
+  outputs = sink.finalize_write(init_result, write_results + extra_shards,
+                                pre_finalize_results)
   if outputs:
-    return (window.TimestampedValue(v, window.MAX_TIMESTAMP) for v in outputs)
+    return (
+        window.TimestampedValue(v, timestamp.MAX_TIMESTAMP) for v in outputs)
 
 
 class _RoundRobinKeyFn(core.DoFn):
 
   def __init__(self, count):
+    # type: (int) -> None
     self.count = count
 
   def start_bundle(self):
@@ -1018,13 +1118,17 @@ class _RoundRobinKeyFn(core.DoFn):
 class RestrictionTracker(object):
   """Manages concurrent access to a restriction.
 
-  Experimental; no backwards-compatibility guarantees.
-
   Keeps track of the restrictions claimed part for a Splittable DoFn.
+
+  The restriction may be modified by different threads, however the system will
+  ensure sufficient locking such that no methods on the restriction tracker
+  will be called concurrently.
 
   See following documents for more details.
   * https://s.apache.org/splittable-do-fn
   * https://s.apache.org/splittable-do-fn-python-sdk
+
+  Experimental; no backwards-compatibility guarantees.
   """
 
   def current_restriction(self):
@@ -1035,36 +1139,21 @@ class RestrictionTracker(object):
 
     The current restriction returned by method may be updated dynamically due
     to due to concurrent invocation of other methods of the
-    ``RestrictionTracker``, For example, ``checkpoint()``.
+    ``RestrictionTracker``, For example, ``split()``.
 
-    ** Thread safety **
+    This API is required to be implemented.
 
-    Methods of the class ``RestrictionTracker`` including this method may get
-    invoked by different threads, hence must be made thread-safe, e.g. by using
-    a single lock object.
+    Returns: a restriction object.
     """
     raise NotImplementedError
 
-  def checkpoint(self):
-    """Performs a checkpoint of the current restriction.
+  def current_progress(self):
+    # type: () -> RestrictionProgress
+    """Returns a RestrictionProgress object representing the current progress.
 
-    Signals that the current ``DoFn.process()`` call should terminate as soon as
-    possible. After this method returns, the tracker MUST refuse all future
-    claim calls, and ``RestrictionTracker.check_done()`` MUST succeed.
-
-    This invocation modifies the value returned by ``current_restriction()``
-    invocation and returns a restriction representing the rest of the work. The
-    old value of ``current_restriction()`` is equivalent to the new value of
-    ``current_restriction()`` and the return value of this method invocation
-    combined.
-
-    ** Thread safety **
-
-    Methods of the class ``RestrictionTracker`` including this method may get
-    invoked by different threads, hence must be made thread-safe, e.g. by using
-    a single lock object.
+    This API is recommended to be implemented. The runner can do a better job
+    at parallel processing with better progress signals.
     """
-
     raise NotImplementedError
 
   def check_done(self):
@@ -1073,15 +1162,427 @@ class RestrictionTracker(object):
     Called by the runner after iterator returned by ``DoFn.process()`` has been
     fully read.
 
+    This method must raise a `ValueError` if there is still any unclaimed work
+    remaining in the restriction when this method is invoked. Exception raised
+    must have an informative error message.
+
+    This API is required to be implemented in order to make sure no data loss
+    during SDK processing.
+
     Returns: ``True`` if current restriction has been fully processed.
-    Raises ValueError: if there is still any unclaimed work remaining in the
-      restriction invoking this method. Exception raised must have an
-      informative error message.
-
-    ** Thread safety **
-
-    Methods of the class ``RestrictionTracker`` including this method may get
-    invoked by different threads, hence must be made thread-safe, e.g. by using
-    a single lock object.
+    Raises:
+      ~exceptions.ValueError: if there is still any unclaimed work remaining.
     """
     raise NotImplementedError
+
+  def try_split(self, fraction_of_remainder):
+    """Splits current restriction based on fraction_of_remainder.
+
+    If splitting the current restriction is possible, the current restriction is
+    split into a primary and residual restriction pair. This invocation updates
+    the ``current_restriction()`` to be the primary restriction effectively
+    having the current ``DoFn.process()`` execution responsible for performing
+    the work that the primary restriction represents. The residual restriction
+    will be executed in a separate ``DoFn.process()`` invocation (likely in a
+    different process). The work performed by executing the primary and residual
+    restrictions as separate ``DoFn.process()`` invocations MUST be equivalent
+    to the work performed as if this split never occurred.
+
+    The ``fraction_of_remainder`` should be used in a best effort manner to
+    choose a primary and residual restriction based upon the fraction of the
+    remaining work that the current ``DoFn.process()`` invocation is responsible
+    for. For example, if a ``DoFn.process()`` was reading a file with a
+    restriction representing the offset range [100, 200) and has processed up to
+    offset 130 with a fraction_of_remainder of 0.7, the primary and residual
+    restrictions returned would be [100, 179), [179, 200) (note: current_offset
+    + fraction_of_remainder * remaining_work = 130 + 0.7 * 70 = 179).
+
+    ``fraction_of_remainder`` = 0 means a checkpoint is required.
+
+    The API is recommended to be implemented for batch pipeline given that it is
+    very important for pipeline scaling and end to end pipeline execution.
+
+    The API is required to be implemented for a streaming pipeline.
+
+    Args:
+      fraction_of_remainder: A hint as to the fraction of work the primary
+        restriction should represent based upon the current known remaining
+        amount of work.
+
+    Returns:
+      (primary_restriction, residual_restriction) if a split was possible,
+      otherwise returns ``None``.
+    """
+    raise NotImplementedError
+
+  def try_claim(self, position):
+    """Attempts to claim the block of work in the current restriction
+    identified by the given position.
+
+    If this succeeds, the DoFn MUST execute the entire block of work. If it
+    fails, the ``DoFn.process()`` MUST return ``None`` without performing any
+    additional work or emitting output (note that emitting output or performing
+    work from ``DoFn.process()`` is also not allowed before the first call of
+    this method).
+
+    The API is required to be implemented.
+
+    Args:
+      position: current position that wants to be claimed.
+
+    Returns: ``True`` if the position can be claimed as current_position.
+    Otherwise, returns ``False``.
+    """
+    raise NotImplementedError
+
+
+class ThreadsafeRestrictionTracker(object):
+  """A thread-safe wrapper which wraps a `RestritionTracker`.
+
+  This wrapper guarantees synchronization of modifying restrictions across
+  multi-thread.
+  """
+
+  def __init__(self, restriction_tracker):
+    if not isinstance(restriction_tracker, RestrictionTracker):
+      raise ValueError(
+          'Initialize ThreadsafeRestrictionTracker requires'
+          'RestrictionTracker.')
+    self._restriction_tracker = restriction_tracker
+    # Records an absolute timestamp when defer_remainder is called.
+    self._deferred_timestamp = None
+    self._lock = threading.RLock()
+    self._deferred_residual = None
+    self._deferred_watermark = None
+
+  def current_restriction(self):
+    with self._lock:
+      return self._restriction_tracker.current_restriction()
+
+  def try_claim(self, position):
+    with self._lock:
+      return self._restriction_tracker.try_claim(position)
+
+  def defer_remainder(self, deferred_time=None):
+    """Performs self-checkpoint on current processing restriction with an
+    expected resuming time.
+
+    Self-checkpoint could happen during processing elements. When executing an
+    DoFn.process(), you may want to stop processing an element and resuming
+    later if current element has been processed quit a long time or you also
+    want to have some outputs from other elements. ``defer_remainder()`` can be
+    called on per element if needed.
+
+    Args:
+      deferred_time: A relative ``timestamp.Duration`` that indicates the ideal
+      time gap between now and resuming, or an absolute ``timestamp.Timestamp``
+      for resuming execution time. If the time_delay is None, the deferred work
+      will be executed as soon as possible.
+    """
+
+    # Record current time for calculating deferred_time later.
+    self._deferred_timestamp = timestamp.Timestamp.now()
+    if (deferred_time and
+        not isinstance(deferred_time, timestamp.Duration) and
+        not isinstance(deferred_time, timestamp.Timestamp)):
+      raise ValueError('The timestamp of deter_remainder() should be a '
+                       'Duration or a Timestamp, or None.')
+    self._deferred_watermark = deferred_time
+    checkpoint = self.try_split(0)
+    if checkpoint:
+      _, self._deferred_residual = checkpoint
+
+  def check_done(self):
+    with self._lock:
+      return self._restriction_tracker.check_done()
+
+  def current_progress(self):
+    with self._lock:
+      return self._restriction_tracker.current_progress()
+
+  def try_split(self, fraction_of_remainder):
+    with self._lock:
+      return self._restriction_tracker.try_split(fraction_of_remainder)
+
+  def deferred_status(self):
+    # type: () -> Optional[Tuple[Any, Timestamp]]
+    """Returns deferred work which is produced by ``defer_remainder()``.
+
+    When there is a self-checkpoint performed, the system needs to fulfill the
+    DelayedBundleApplication with deferred_work for a  ProcessBundleResponse.
+    The system calls this API to get deferred_residual with watermark together
+    to help the runner to schedule a future work.
+
+    Returns: (deferred_residual, time_delay) if having any residual, else None.
+    """
+    if self._deferred_residual:
+      # If _deferred_watermark is None, create Duration(0).
+      if not self._deferred_watermark:
+        self._deferred_watermark = timestamp.Duration()
+      # If an absolute timestamp is provided, calculate the delta between
+      # the absoluted time and the time deferred_status() is called.
+      elif isinstance(self._deferred_watermark, timestamp.Timestamp):
+        self._deferred_watermark = (self._deferred_watermark -
+                                    timestamp.Timestamp.now())
+      # If a Duration is provided, the deferred time should be:
+      # provided duration - the spent time since the defer_remainder() is
+      # called.
+      elif isinstance(self._deferred_watermark, timestamp.Duration):
+        self._deferred_watermark -= (timestamp.Timestamp.now() -
+                                     self._deferred_timestamp)
+      return self._deferred_residual, self._deferred_watermark
+
+
+class RestrictionTrackerView(object):
+  """A DoFn view of thread-safe RestrictionTracker.
+
+  The RestrictionTrackerView wraps a ThreadsafeRestrictionTracker and only
+  exposes APIs that will be called by a ``DoFn.process()``. During execution
+  time, the RestrictionTrackerView will be fed into the ``DoFn.process`` as a
+  restriction_tracker.
+  """
+
+  def __init__(self, threadsafe_restriction_tracker):
+    if not isinstance(threadsafe_restriction_tracker,
+                      ThreadsafeRestrictionTracker):
+      raise ValueError('Initialize RestrictionTrackerView requires '
+                       'ThreadsafeRestrictionTracker.')
+    self._threadsafe_restriction_tracker = threadsafe_restriction_tracker
+
+  def current_restriction(self):
+    return self._threadsafe_restriction_tracker.current_restriction()
+
+  def try_claim(self, position):
+    return self._threadsafe_restriction_tracker.try_claim(position)
+
+  def defer_remainder(self, deferred_time=None):
+    self._threadsafe_restriction_tracker.defer_remainder(deferred_time)
+
+
+class RestrictionProgress(object):
+  """Used to record the progress of a restriction.
+
+  Experimental; no backwards-compatibility guarantees.
+  """
+  def __init__(self, **kwargs):
+    # Only accept keyword arguments.
+    self._fraction = kwargs.pop('fraction', None)
+    self._completed = kwargs.pop('completed', None)
+    self._remaining = kwargs.pop('remaining', None)
+    assert not kwargs
+
+  def __repr__(self):
+    return 'RestrictionProgress(fraction=%s, completed=%s, remaining=%s)' % (
+        self._fraction, self._completed, self._remaining)
+
+  @property
+  def completed_work(self):
+    if self._completed:
+      return self._completed
+    elif self._remaining and self._fraction:
+      return self._remaining * self._fraction / (1 - self._fraction)
+
+  @property
+  def remaining_work(self):
+    if self._remaining:
+      return self._remaining
+    elif self._completed:
+      return self._completed * (1 - self._fraction) / self._fraction
+
+  @property
+  def total_work(self):
+    return self.completed_work + self.remaining_work
+
+  @property
+  def fraction_completed(self):
+    if self._fraction is not None:
+      return self._fraction
+    else:
+      return float(self._completed) / self.total_work
+
+  @property
+  def fraction_remaining(self):
+    if self._fraction is not None:
+      return 1 - self._fraction
+    else:
+      return float(self._remaining) / self.total_work
+
+  def with_completed(self, completed):
+    return RestrictionProgress(
+        fraction=self._fraction, remaining=self._remaining, completed=completed)
+
+
+class _SDFBoundedSourceWrapper(ptransform.PTransform):
+  """A ``PTransform`` that uses SDF to read from a ``BoundedSource``.
+
+  NOTE: This transform can only be used with beam_fn_api enabled.
+  """
+
+  class _SDFBoundedSourceRestriction(object):
+    """ A restriction wraps SourceBundle and RangeTracker. """
+    def __init__(self, source_bundle, range_tracker=None):
+      self._source_bundle = source_bundle
+      self._range_tracker = range_tracker
+
+    def __reduce__(self):
+      # The instance of RangeTracker shouldn't be serialized.
+      return (self.__class__, (self._source_bundle, ))
+
+    def range_tracker(self):
+      if not self._range_tracker:
+        self._range_tracker = self._source_bundle.source.get_range_tracker(
+            self._source_bundle.start_position,
+            self._source_bundle.stop_position)
+      return self._range_tracker
+
+    def weight(self):
+      return self._source_bundle.weight
+
+    def source(self):
+      return self._source_bundle.source
+
+    def try_split(self, fraction_of_remainder):
+      consumed_fraction = self.range_tracker().fraction_consumed()
+      fraction = (consumed_fraction +
+                  (1 - consumed_fraction) * fraction_of_remainder)
+      position = self.range_tracker().position_at_fraction(fraction)
+      # Need to stash current stop_pos before splitting since
+      # range_tracker.split will update its stop_pos if splits
+      # successfully.
+      stop_pos = self._source_bundle.stop_position
+      split_result = self.range_tracker().try_split(position)
+      if split_result:
+        split_pos, split_fraction = split_result
+        primary_weight = self._source_bundle.weight * split_fraction
+        residual_weight = self._source_bundle.weight - primary_weight
+        # Update self to primary weight and end position.
+        self._source_bundle = SourceBundle(primary_weight,
+                                           self._source_bundle.source,
+                                           self._source_bundle.start_position,
+                                           split_pos)
+        return (self, _SDFBoundedSourceWrapper._SDFBoundedSourceRestriction(
+            SourceBundle(residual_weight,
+                         self._source_bundle.source,
+                         split_pos,
+                         stop_pos)))
+
+
+  class _SDFBoundedSourceRestrictionTracker(RestrictionTracker):
+    """An `iobase.RestrictionTracker` implementations for wrapping BoundedSource
+    with SDF. The tracked restriction is a _SDFBoundedSourceRestriction, which
+    wraps SourceBundle and RangeTracker.
+
+    Delegated RangeTracker guarantees synchronization safety.
+    """
+    def __init__(self, restriction):
+      if not isinstance(restriction,
+                        _SDFBoundedSourceWrapper._SDFBoundedSourceRestriction):
+        raise ValueError('Initializing SDFBoundedSourceRestrictionTracker'
+                         ' requires a _SDFBoundedSourceRestriction')
+      self.restriction = restriction
+
+    def current_progress(self):
+      # type: () -> RestrictionProgress
+      return RestrictionProgress(
+          fraction=self.restriction.range_tracker().fraction_consumed())
+
+    def current_restriction(self):
+      self.restriction.range_tracker()
+      return self.restriction
+
+    def start_pos(self):
+      return self.restriction.range_tracker().start_position()
+
+    def stop_pos(self):
+      return self.restriction.range_tracker().stop_position()
+
+    def try_claim(self, position):
+      return self.restriction.range_tracker().try_claim(position)
+
+    def try_split(self, fraction_of_remainder):
+      return self.restriction.try_split(fraction_of_remainder)
+
+    def check_done(self):
+      return self.restriction.range_tracker().fraction_consumed() >= 1.0
+
+
+  class _SDFBoundedSourceRestrictionProvider(core.RestrictionProvider):
+    """A `RestrictionProvider` that is used by SDF for `BoundedSource`."""
+
+    def __init__(self, source, desired_chunk_size=None):
+      self._source = source
+      self._desired_chunk_size = desired_chunk_size
+
+    def initial_restriction(self, element):
+      # Get initial range_tracker from source
+      range_tracker = self._source.get_range_tracker(None, None)
+      return _SDFBoundedSourceWrapper._SDFBoundedSourceRestriction(
+          SourceBundle(None,
+                       self._source,
+                       range_tracker.start_position(),
+                       range_tracker.stop_position()))
+
+    def create_tracker(self, restriction):
+      return _SDFBoundedSourceWrapper._SDFBoundedSourceRestrictionTracker(
+          restriction)
+
+    def split(self, element, restriction):
+      # Invoke source.split to get initial splitting results.
+      source_bundles = self._source.split(self._desired_chunk_size)
+      for source_bundle in source_bundles:
+        yield _SDFBoundedSourceWrapper._SDFBoundedSourceRestriction(
+            source_bundle)
+
+    def restriction_size(self, element, restriction):
+      return restriction.weight()
+
+    def restriction_coder(self):
+      return coders.DillCoder()
+
+  def __init__(self, source):
+    if not isinstance(source, BoundedSource):
+      raise RuntimeError('SDFBoundedSourceWrapper can only wrap BoundedSource')
+    super(_SDFBoundedSourceWrapper, self).__init__()
+    self.source = source
+
+  def _create_sdf_bounded_source_dofn(self):
+    source = self.source
+    try:
+      estimated_size = source.estimate_size()
+    except NotImplementedError:
+      estimated_size = None
+    chunk_size = Read.get_desired_chunk_size(estimated_size)
+
+    class SDFBoundedSourceDoFn(core.DoFn):
+      def __init__(self, read_source):
+        self.source = read_source
+
+      def process(
+          self,
+          element,
+          restriction_tracker=core.DoFn.RestrictionParam(
+              _SDFBoundedSourceWrapper._SDFBoundedSourceRestrictionProvider(
+                  source, chunk_size))):
+        current_restriction = restriction_tracker.current_restriction()
+        assert isinstance(current_restriction,
+                          _SDFBoundedSourceWrapper._SDFBoundedSourceRestriction)
+        return current_restriction.source().read(
+            current_restriction.range_tracker())
+
+    return SDFBoundedSourceDoFn(self.source)
+
+  def expand(self, pbegin):
+    return (pbegin
+            | core.Impulse()
+            | core.ParDo(self._create_sdf_bounded_source_dofn()))
+
+  def get_windowing(self, unused_inputs):
+    return core.Windowing(window.GlobalWindows())
+
+  def _infer_output_coder(self, input_type=None, input_coder=None):
+    return self.source.default_output_coder()
+
+  def display_data(self):
+    return {'source': DisplayDataItem(self.source.__class__,
+                                      label='Read Source'),
+            'source_dd': self.source}

@@ -16,8 +16,12 @@
  * limitations under the License.
  */
 
-apply from: project(":").file("build_rules.gradle")
-applyJavaNature()
+plugins { id 'org.apache.beam.module' }
+
+applyJavaNature(
+    automaticModuleName: 'org.apache.beam.runners.local',
+    archivesBaseName: 'beam-runners-local-java-core'
+)
 
 description = "Apache Beam :: Runners :: Local Java Core"
 
@@ -28,16 +32,9 @@ dependencies {
    * but should not be used within this library to execute any UDFs.
    * TODO: Add an APISurfaceTest to force this to be the case, if possible.
   */
-  shadow project(path: ":beam-sdks-parent:beam-sdks-java-parent:beam-sdks-java-core", configuration: "shadow")
-  shadow library.java.joda_time
-  shadow library.java.findbugs_jsr305
-  shadowTest library.java.hamcrest_core
-  shadowTest library.java.junit
+  compile project(path: ":sdks:java:core", configuration: "shadow")
+  compile library.java.joda_time
+  testCompile library.java.hamcrest_core
+  testCompile library.java.hamcrest_library
+  testCompile library.java.junit
 }
-
-task packageTests(type: Jar) {
-  from sourceSets.test.output
-  classifier = "tests"
-}
-
-artifacts.archives packageTests

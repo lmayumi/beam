@@ -3,14 +3,16 @@
 
 package fnexecution_v1
 
-import proto "github.com/golang/protobuf/proto"
-import fmt "fmt"
-import math "math"
-import google_protobuf2 "github.com/golang/protobuf/ptypes/struct"
-
 import (
-	context "golang.org/x/net/context"
+	context "context"
+	fmt "fmt"
+	pipeline_v1 "github.com/apache/beam/sdks/go/pkg/beam/model/pipeline_v1"
+	proto "github.com/golang/protobuf/proto"
+	_struct "github.com/golang/protobuf/ptypes/struct"
 	grpc "google.golang.org/grpc"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
+	math "math"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -18,24 +20,76 @@ var _ = proto.Marshal
 var _ = fmt.Errorf
 var _ = math.Inf
 
+// This is a compile-time assertion to ensure that this generated file
+// is compatible with the proto package it is being compiled against.
+// A compilation error at this line likely means your copy of the
+// proto package needs to be updated.
+const _ = proto.ProtoPackageIsVersion3 // please upgrade the proto package
+
 // A request to get the provision info of a SDK harness worker instance.
 type GetProvisionInfoRequest struct {
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *GetProvisionInfoRequest) Reset()                    { *m = GetProvisionInfoRequest{} }
-func (m *GetProvisionInfoRequest) String() string            { return proto.CompactTextString(m) }
-func (*GetProvisionInfoRequest) ProtoMessage()               {}
-func (*GetProvisionInfoRequest) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{0} }
+func (m *GetProvisionInfoRequest) Reset()         { *m = GetProvisionInfoRequest{} }
+func (m *GetProvisionInfoRequest) String() string { return proto.CompactTextString(m) }
+func (*GetProvisionInfoRequest) ProtoMessage()    {}
+func (*GetProvisionInfoRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_92e393e5933c7d6f, []int{0}
+}
+
+func (m *GetProvisionInfoRequest) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_GetProvisionInfoRequest.Unmarshal(m, b)
+}
+func (m *GetProvisionInfoRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_GetProvisionInfoRequest.Marshal(b, m, deterministic)
+}
+func (m *GetProvisionInfoRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetProvisionInfoRequest.Merge(m, src)
+}
+func (m *GetProvisionInfoRequest) XXX_Size() int {
+	return xxx_messageInfo_GetProvisionInfoRequest.Size(m)
+}
+func (m *GetProvisionInfoRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetProvisionInfoRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetProvisionInfoRequest proto.InternalMessageInfo
 
 // A response containing the provision info of a SDK harness worker instance.
 type GetProvisionInfoResponse struct {
-	Info *ProvisionInfo `protobuf:"bytes,1,opt,name=info" json:"info,omitempty"`
+	Info                 *ProvisionInfo `protobuf:"bytes,1,opt,name=info,proto3" json:"info,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}       `json:"-"`
+	XXX_unrecognized     []byte         `json:"-"`
+	XXX_sizecache        int32          `json:"-"`
 }
 
-func (m *GetProvisionInfoResponse) Reset()                    { *m = GetProvisionInfoResponse{} }
-func (m *GetProvisionInfoResponse) String() string            { return proto.CompactTextString(m) }
-func (*GetProvisionInfoResponse) ProtoMessage()               {}
-func (*GetProvisionInfoResponse) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{1} }
+func (m *GetProvisionInfoResponse) Reset()         { *m = GetProvisionInfoResponse{} }
+func (m *GetProvisionInfoResponse) String() string { return proto.CompactTextString(m) }
+func (*GetProvisionInfoResponse) ProtoMessage()    {}
+func (*GetProvisionInfoResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_92e393e5933c7d6f, []int{1}
+}
+
+func (m *GetProvisionInfoResponse) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_GetProvisionInfoResponse.Unmarshal(m, b)
+}
+func (m *GetProvisionInfoResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_GetProvisionInfoResponse.Marshal(b, m, deterministic)
+}
+func (m *GetProvisionInfoResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetProvisionInfoResponse.Merge(m, src)
+}
+func (m *GetProvisionInfoResponse) XXX_Size() int {
+	return xxx_messageInfo_GetProvisionInfoResponse.Size(m)
+}
+func (m *GetProvisionInfoResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetProvisionInfoResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetProvisionInfoResponse proto.InternalMessageInfo
 
 func (m *GetProvisionInfoResponse) GetInfo() *ProvisionInfo {
 	if m != nil {
@@ -48,21 +102,57 @@ func (m *GetProvisionInfoResponse) GetInfo() *ProvisionInfo {
 // such as pipeline options, resource constraints and other job metadata
 type ProvisionInfo struct {
 	// (required) The job ID.
-	JobId string `protobuf:"bytes,1,opt,name=job_id,json=jobId" json:"job_id,omitempty"`
+	JobId string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	// (required) The job name.
-	JobName string `protobuf:"bytes,2,opt,name=job_name,json=jobName" json:"job_name,omitempty"`
+	JobName string `protobuf:"bytes,2,opt,name=job_name,json=jobName,proto3" json:"job_name,omitempty"`
+	// (required) The worker ID. Often this will be the hostname.
+	//
+	// This is independent of the id passed to the SDK harness via the 'id'
+	// argument in the Beam container contract.
+	WorkerId string `protobuf:"bytes,5,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
 	// (required) Pipeline options. For non-template jobs, the options are
 	// identical to what is passed to job submission.
-	PipelineOptions *google_protobuf2.Struct `protobuf:"bytes,3,opt,name=pipeline_options,json=pipelineOptions" json:"pipeline_options,omitempty"`
+	PipelineOptions *_struct.Struct `protobuf:"bytes,3,opt,name=pipeline_options,json=pipelineOptions,proto3" json:"pipeline_options,omitempty"`
 	// (optional) Resource limits that the SDK harness worker should respect.
 	// Runners may -- but are not required to -- enforce any limits provided.
-	ResourceLimits *Resources `protobuf:"bytes,4,opt,name=resource_limits,json=resourceLimits" json:"resource_limits,omitempty"`
+	ResourceLimits *Resources `protobuf:"bytes,4,opt,name=resource_limits,json=resourceLimits,proto3" json:"resource_limits,omitempty"`
+	// (required) The artifact retrieval token produced by
+	// ArtifactStagingService.CommitManifestResponse.
+	RetrievalToken string `protobuf:"bytes,6,opt,name=retrieval_token,json=retrievalToken,proto3" json:"retrieval_token,omitempty"`
+	// (optional) The endpoint that the runner is hosting for the SDK to submit
+	// status reports to during pipeline execution. This field will only be
+	// populated if the runner supports SDK status reports. For more details see
+	// https://s.apache.org/beam-fn-api-harness-status
+	StatusEndpoint       *pipeline_v1.ApiServiceDescriptor `protobuf:"bytes,7,opt,name=status_endpoint,json=statusEndpoint,proto3" json:"status_endpoint,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}                          `json:"-"`
+	XXX_unrecognized     []byte                            `json:"-"`
+	XXX_sizecache        int32                             `json:"-"`
 }
 
-func (m *ProvisionInfo) Reset()                    { *m = ProvisionInfo{} }
-func (m *ProvisionInfo) String() string            { return proto.CompactTextString(m) }
-func (*ProvisionInfo) ProtoMessage()               {}
-func (*ProvisionInfo) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{2} }
+func (m *ProvisionInfo) Reset()         { *m = ProvisionInfo{} }
+func (m *ProvisionInfo) String() string { return proto.CompactTextString(m) }
+func (*ProvisionInfo) ProtoMessage()    {}
+func (*ProvisionInfo) Descriptor() ([]byte, []int) {
+	return fileDescriptor_92e393e5933c7d6f, []int{2}
+}
+
+func (m *ProvisionInfo) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_ProvisionInfo.Unmarshal(m, b)
+}
+func (m *ProvisionInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_ProvisionInfo.Marshal(b, m, deterministic)
+}
+func (m *ProvisionInfo) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ProvisionInfo.Merge(m, src)
+}
+func (m *ProvisionInfo) XXX_Size() int {
+	return xxx_messageInfo_ProvisionInfo.Size(m)
+}
+func (m *ProvisionInfo) XXX_DiscardUnknown() {
+	xxx_messageInfo_ProvisionInfo.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_ProvisionInfo proto.InternalMessageInfo
 
 func (m *ProvisionInfo) GetJobId() string {
 	if m != nil {
@@ -78,7 +168,14 @@ func (m *ProvisionInfo) GetJobName() string {
 	return ""
 }
 
-func (m *ProvisionInfo) GetPipelineOptions() *google_protobuf2.Struct {
+func (m *ProvisionInfo) GetWorkerId() string {
+	if m != nil {
+		return m.WorkerId
+	}
+	return ""
+}
+
+func (m *ProvisionInfo) GetPipelineOptions() *_struct.Struct {
 	if m != nil {
 		return m.PipelineOptions
 	}
@@ -92,22 +189,59 @@ func (m *ProvisionInfo) GetResourceLimits() *Resources {
 	return nil
 }
 
+func (m *ProvisionInfo) GetRetrievalToken() string {
+	if m != nil {
+		return m.RetrievalToken
+	}
+	return ""
+}
+
+func (m *ProvisionInfo) GetStatusEndpoint() *pipeline_v1.ApiServiceDescriptor {
+	if m != nil {
+		return m.StatusEndpoint
+	}
+	return nil
+}
+
 // Resources specify limits for local resources, such memory and cpu. It
 // is used to inform SDK harnesses of their allocated footprint.
 type Resources struct {
 	// (optional) Memory usage limits. SDKs can use this value to configure
 	// internal buffer sizes and language specific sizes.
-	Memory *Resources_Memory `protobuf:"bytes,1,opt,name=memory" json:"memory,omitempty"`
+	Memory *Resources_Memory `protobuf:"bytes,1,opt,name=memory,proto3" json:"memory,omitempty"`
 	// (optional) CPU usage limits.
-	Cpu *Resources_Cpu `protobuf:"bytes,2,opt,name=cpu" json:"cpu,omitempty"`
+	Cpu *Resources_Cpu `protobuf:"bytes,2,opt,name=cpu,proto3" json:"cpu,omitempty"`
 	// (optional) Disk size limits for the semi-persistent location.
-	SemiPersistentDisk *Resources_Disk `protobuf:"bytes,3,opt,name=semi_persistent_disk,json=semiPersistentDisk" json:"semi_persistent_disk,omitempty"`
+	SemiPersistentDisk   *Resources_Disk `protobuf:"bytes,3,opt,name=semi_persistent_disk,json=semiPersistentDisk,proto3" json:"semi_persistent_disk,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}        `json:"-"`
+	XXX_unrecognized     []byte          `json:"-"`
+	XXX_sizecache        int32           `json:"-"`
 }
 
-func (m *Resources) Reset()                    { *m = Resources{} }
-func (m *Resources) String() string            { return proto.CompactTextString(m) }
-func (*Resources) ProtoMessage()               {}
-func (*Resources) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{3} }
+func (m *Resources) Reset()         { *m = Resources{} }
+func (m *Resources) String() string { return proto.CompactTextString(m) }
+func (*Resources) ProtoMessage()    {}
+func (*Resources) Descriptor() ([]byte, []int) {
+	return fileDescriptor_92e393e5933c7d6f, []int{3}
+}
+
+func (m *Resources) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_Resources.Unmarshal(m, b)
+}
+func (m *Resources) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_Resources.Marshal(b, m, deterministic)
+}
+func (m *Resources) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Resources.Merge(m, src)
+}
+func (m *Resources) XXX_Size() int {
+	return xxx_messageInfo_Resources.Size(m)
+}
+func (m *Resources) XXX_DiscardUnknown() {
+	xxx_messageInfo_Resources.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Resources proto.InternalMessageInfo
 
 func (m *Resources) GetMemory() *Resources_Memory {
 	if m != nil {
@@ -133,13 +267,36 @@ func (m *Resources) GetSemiPersistentDisk() *Resources_Disk {
 // Memory limits.
 type Resources_Memory struct {
 	// (optional) Hard limit in bytes. A zero value means unspecified.
-	Size uint64 `protobuf:"varint,1,opt,name=size" json:"size,omitempty"`
+	Size                 uint64   `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *Resources_Memory) Reset()                    { *m = Resources_Memory{} }
-func (m *Resources_Memory) String() string            { return proto.CompactTextString(m) }
-func (*Resources_Memory) ProtoMessage()               {}
-func (*Resources_Memory) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{3, 0} }
+func (m *Resources_Memory) Reset()         { *m = Resources_Memory{} }
+func (m *Resources_Memory) String() string { return proto.CompactTextString(m) }
+func (*Resources_Memory) ProtoMessage()    {}
+func (*Resources_Memory) Descriptor() ([]byte, []int) {
+	return fileDescriptor_92e393e5933c7d6f, []int{3, 0}
+}
+
+func (m *Resources_Memory) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_Resources_Memory.Unmarshal(m, b)
+}
+func (m *Resources_Memory) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_Resources_Memory.Marshal(b, m, deterministic)
+}
+func (m *Resources_Memory) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Resources_Memory.Merge(m, src)
+}
+func (m *Resources_Memory) XXX_Size() int {
+	return xxx_messageInfo_Resources_Memory.Size(m)
+}
+func (m *Resources_Memory) XXX_DiscardUnknown() {
+	xxx_messageInfo_Resources_Memory.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Resources_Memory proto.InternalMessageInfo
 
 func (m *Resources_Memory) GetSize() uint64 {
 	if m != nil {
@@ -152,13 +309,36 @@ func (m *Resources_Memory) GetSize() uint64 {
 type Resources_Cpu struct {
 	// (optional) Shares of a cpu to use. Fractional values, such as "0.2"
 	// or "2.5", are fine. Any value <= 0 means unspecified.
-	Shares float32 `protobuf:"fixed32,1,opt,name=shares" json:"shares,omitempty"`
+	Shares               float32  `protobuf:"fixed32,1,opt,name=shares,proto3" json:"shares,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *Resources_Cpu) Reset()                    { *m = Resources_Cpu{} }
-func (m *Resources_Cpu) String() string            { return proto.CompactTextString(m) }
-func (*Resources_Cpu) ProtoMessage()               {}
-func (*Resources_Cpu) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{3, 1} }
+func (m *Resources_Cpu) Reset()         { *m = Resources_Cpu{} }
+func (m *Resources_Cpu) String() string { return proto.CompactTextString(m) }
+func (*Resources_Cpu) ProtoMessage()    {}
+func (*Resources_Cpu) Descriptor() ([]byte, []int) {
+	return fileDescriptor_92e393e5933c7d6f, []int{3, 1}
+}
+
+func (m *Resources_Cpu) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_Resources_Cpu.Unmarshal(m, b)
+}
+func (m *Resources_Cpu) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_Resources_Cpu.Marshal(b, m, deterministic)
+}
+func (m *Resources_Cpu) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Resources_Cpu.Merge(m, src)
+}
+func (m *Resources_Cpu) XXX_Size() int {
+	return xxx_messageInfo_Resources_Cpu.Size(m)
+}
+func (m *Resources_Cpu) XXX_DiscardUnknown() {
+	xxx_messageInfo_Resources_Cpu.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Resources_Cpu proto.InternalMessageInfo
 
 func (m *Resources_Cpu) GetShares() float32 {
 	if m != nil {
@@ -170,13 +350,36 @@ func (m *Resources_Cpu) GetShares() float32 {
 // Disk limits.
 type Resources_Disk struct {
 	// (optional) Hard limit in bytes. A zero value means unspecified.
-	Size uint64 `protobuf:"varint,1,opt,name=size" json:"size,omitempty"`
+	Size                 uint64   `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *Resources_Disk) Reset()                    { *m = Resources_Disk{} }
-func (m *Resources_Disk) String() string            { return proto.CompactTextString(m) }
-func (*Resources_Disk) ProtoMessage()               {}
-func (*Resources_Disk) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{3, 2} }
+func (m *Resources_Disk) Reset()         { *m = Resources_Disk{} }
+func (m *Resources_Disk) String() string { return proto.CompactTextString(m) }
+func (*Resources_Disk) ProtoMessage()    {}
+func (*Resources_Disk) Descriptor() ([]byte, []int) {
+	return fileDescriptor_92e393e5933c7d6f, []int{3, 2}
+}
+
+func (m *Resources_Disk) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_Resources_Disk.Unmarshal(m, b)
+}
+func (m *Resources_Disk) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_Resources_Disk.Marshal(b, m, deterministic)
+}
+func (m *Resources_Disk) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Resources_Disk.Merge(m, src)
+}
+func (m *Resources_Disk) XXX_Size() int {
+	return xxx_messageInfo_Resources_Disk.Size(m)
+}
+func (m *Resources_Disk) XXX_DiscardUnknown() {
+	xxx_messageInfo_Resources_Disk.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Resources_Disk proto.InternalMessageInfo
 
 func (m *Resources_Disk) GetSize() uint64 {
 	if m != nil {
@@ -195,6 +398,47 @@ func init() {
 	proto.RegisterType((*Resources_Disk)(nil), "org.apache.beam.model.fn_execution.v1.Resources.Disk")
 }
 
+func init() { proto.RegisterFile("beam_provision_api.proto", fileDescriptor_92e393e5933c7d6f) }
+
+var fileDescriptor_92e393e5933c7d6f = []byte{
+	// 556 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x93, 0xdb, 0x6e, 0xd3, 0x40,
+	0x10, 0x86, 0x95, 0x43, 0xdd, 0x66, 0x80, 0x24, 0x5a, 0x01, 0x75, 0x4d, 0x91, 0x50, 0x04, 0x82,
+	0xab, 0x2d, 0x2d, 0xa0, 0xde, 0x81, 0x9a, 0x86, 0x43, 0x24, 0xa0, 0x95, 0xcb, 0x0d, 0xdc, 0x18,
+	0x1f, 0x26, 0xe9, 0x26, 0xf1, 0xee, 0xb2, 0xbb, 0x0e, 0x87, 0x27, 0xe0, 0x9e, 0x97, 0xe0, 0xc9,
+	0x78, 0x0e, 0xe4, 0xb5, 0x1d, 0x5a, 0x20, 0x52, 0xda, 0x3b, 0x7b, 0x66, 0xff, 0x6f, 0xe7, 0x9f,
+	0xd9, 0x01, 0x37, 0xc2, 0x30, 0x0d, 0xa4, 0x12, 0x73, 0xa6, 0x99, 0xe0, 0x41, 0x28, 0x19, 0x95,
+	0x4a, 0x18, 0x41, 0xee, 0x09, 0x35, 0xa6, 0xa1, 0x0c, 0xe3, 0x53, 0xa4, 0xf9, 0x21, 0x9a, 0x8a,
+	0x04, 0x67, 0x74, 0xc4, 0x03, 0xfc, 0x82, 0x71, 0x66, 0x98, 0xe0, 0x74, 0xbe, 0xeb, 0x75, 0x90,
+	0x27, 0x52, 0x30, 0x6e, 0x74, 0xa1, 0xf3, 0xb6, 0xc7, 0x42, 0x8c, 0x67, 0xb8, 0x63, 0xff, 0xa2,
+	0x6c, 0xb4, 0xa3, 0x8d, 0xca, 0x62, 0x53, 0x64, 0x7b, 0x5b, 0xb0, 0xf9, 0x12, 0xcd, 0x71, 0x75,
+	0xdf, 0x90, 0x8f, 0x84, 0x8f, 0x9f, 0x32, 0xd4, 0xa6, 0x97, 0x80, 0xfb, 0x6f, 0x4a, 0x4b, 0xc1,
+	0x35, 0x92, 0x57, 0xd0, 0x64, 0x7c, 0x24, 0xdc, 0xda, 0x9d, 0xda, 0x83, 0x2b, 0x7b, 0x8f, 0xe9,
+	0x4a, 0xb5, 0xd1, 0xf3, 0x2c, 0x4b, 0xe8, 0x7d, 0x6f, 0xc0, 0xb5, 0x73, 0x71, 0x72, 0x03, 0x9c,
+	0x89, 0x88, 0x02, 0x96, 0x58, 0x7a, 0xcb, 0x5f, 0x9b, 0x88, 0x68, 0x98, 0x90, 0x2d, 0xd8, 0xc8,
+	0xc3, 0x3c, 0x4c, 0xd1, 0xad, 0xdb, 0xc4, 0xfa, 0x44, 0x44, 0x6f, 0xc3, 0x14, 0xc9, 0x2d, 0x68,
+	0x7d, 0x16, 0x6a, 0x8a, 0x2a, 0x17, 0xad, 0xd9, 0xdc, 0x46, 0x11, 0x18, 0x26, 0xa4, 0x0f, 0x5d,
+	0xc9, 0x24, 0xce, 0x18, 0xc7, 0x40, 0xc8, 0xbc, 0x14, 0xed, 0x36, 0x6c, 0xd9, 0x9b, 0xb4, 0x68,
+	0x0d, 0xad, 0x5a, 0x43, 0x4f, 0x6c, 0x6b, 0xfc, 0x4e, 0x25, 0x38, 0x2a, 0xce, 0x93, 0xf7, 0xd0,
+	0x51, 0xa8, 0x45, 0xa6, 0x62, 0x0c, 0x66, 0x2c, 0x65, 0x46, 0xbb, 0x4d, 0x8b, 0x78, 0xb8, 0xa2,
+	0x73, 0xbf, 0x54, 0x6b, 0xbf, 0x5d, 0x81, 0x5e, 0x5b, 0x0e, 0xb9, 0x9f, 0xa3, 0x8d, 0x62, 0x38,
+	0x0f, 0x67, 0x81, 0x11, 0x53, 0xe4, 0xae, 0x63, 0x1d, 0xb4, 0x17, 0xe1, 0x77, 0x79, 0x94, 0x7c,
+	0x84, 0x8e, 0x36, 0xa1, 0xc9, 0x74, 0x50, 0x4d, 0xd8, 0x5d, 0xb7, 0x35, 0xec, 0x2f, 0xa9, 0xa1,
+	0x32, 0x91, 0xdf, 0x7f, 0x20, 0xd9, 0x09, 0xaa, 0x39, 0x8b, 0x71, 0x80, 0x3a, 0x56, 0x4c, 0x1a,
+	0xa1, 0xfc, 0x76, 0xc1, 0x7b, 0x5e, 0xe2, 0x7a, 0xbf, 0xea, 0xd0, 0x5a, 0x14, 0x4a, 0x8e, 0xc0,
+	0x49, 0x31, 0x15, 0xea, 0x6b, 0x39, 0xe4, 0xfd, 0x8b, 0x5a, 0xa5, 0x6f, 0xac, 0xdc, 0x2f, 0x31,
+	0xe4, 0x05, 0x34, 0x62, 0x99, 0xd9, 0xd9, 0xad, 0xfe, 0x64, 0xfe, 0xd0, 0x0e, 0x65, 0xe6, 0xe7,
+	0x00, 0x32, 0x86, 0xeb, 0x1a, 0x53, 0x16, 0x48, 0x54, 0x9a, 0x69, 0x83, 0xdc, 0x04, 0x09, 0xd3,
+	0xd3, 0x72, 0xa8, 0x4f, 0x2e, 0x0c, 0x1e, 0x30, 0x3d, 0xf5, 0x49, 0x8e, 0x3c, 0x5e, 0x10, 0xf3,
+	0x98, 0xb7, 0x0d, 0x4e, 0x61, 0x81, 0x10, 0x68, 0x6a, 0xf6, 0x0d, 0x6d, 0x27, 0x9a, 0xbe, 0xfd,
+	0xf6, 0x6e, 0x43, 0xe3, 0x50, 0x66, 0xe4, 0x26, 0x38, 0xfa, 0x34, 0x54, 0xa8, 0x6d, 0xb2, 0xee,
+	0x97, 0x7f, 0x9e, 0x07, 0xcd, 0x1c, 0xf2, 0x3f, 0xe9, 0xde, 0xcf, 0x1a, 0x74, 0x17, 0x6f, 0xbe,
+	0x9c, 0x0b, 0xf9, 0x51, 0x83, 0xee, 0xdf, 0xfb, 0x46, 0x9e, 0xae, 0xe8, 0x66, 0xc9, 0x0e, 0x7b,
+	0xcf, 0x2e, 0xad, 0x2f, 0x16, 0xbd, 0x3f, 0x80, 0xbb, 0xcb, 0x08, 0x67, 0x01, 0xfd, 0xab, 0x0b,
+	0xf9, 0x81, 0x64, 0x1f, 0xda, 0x67, 0xb2, 0xc1, 0x7c, 0x37, 0x72, 0xec, 0x86, 0x3d, 0xfa, 0x1d,
+	0x00, 0x00, 0xff, 0xff, 0xb2, 0x30, 0x35, 0xd6, 0xde, 0x04, 0x00, 0x00,
+}
+
 // Reference imports to suppress errors if they are not otherwise used.
 var _ context.Context
 var _ grpc.ClientConn
@@ -203,8 +447,9 @@ var _ grpc.ClientConn
 // is compatible with the grpc package it is being compiled against.
 const _ = grpc.SupportPackageIsVersion4
 
-// Client API for ProvisionService service
-
+// ProvisionServiceClient is the client API for ProvisionService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type ProvisionServiceClient interface {
 	// Get provision information for the SDK harness worker instance.
 	GetProvisionInfo(ctx context.Context, in *GetProvisionInfoRequest, opts ...grpc.CallOption) (*GetProvisionInfoResponse, error)
@@ -220,18 +465,25 @@ func NewProvisionServiceClient(cc *grpc.ClientConn) ProvisionServiceClient {
 
 func (c *provisionServiceClient) GetProvisionInfo(ctx context.Context, in *GetProvisionInfoRequest, opts ...grpc.CallOption) (*GetProvisionInfoResponse, error) {
 	out := new(GetProvisionInfoResponse)
-	err := grpc.Invoke(ctx, "/org.apache.beam.model.fn_execution.v1.ProvisionService/GetProvisionInfo", in, out, c.cc, opts...)
+	err := c.cc.Invoke(ctx, "/org.apache.beam.model.fn_execution.v1.ProvisionService/GetProvisionInfo", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// Server API for ProvisionService service
-
+// ProvisionServiceServer is the server API for ProvisionService service.
 type ProvisionServiceServer interface {
 	// Get provision information for the SDK harness worker instance.
 	GetProvisionInfo(context.Context, *GetProvisionInfoRequest) (*GetProvisionInfoResponse, error)
+}
+
+// UnimplementedProvisionServiceServer can be embedded to have forward compatible implementations.
+type UnimplementedProvisionServiceServer struct {
+}
+
+func (*UnimplementedProvisionServiceServer) GetProvisionInfo(ctx context.Context, req *GetProvisionInfoRequest) (*GetProvisionInfoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetProvisionInfo not implemented")
 }
 
 func RegisterProvisionServiceServer(s *grpc.Server, srv ProvisionServiceServer) {
@@ -267,40 +519,4 @@ var _ProvisionService_serviceDesc = grpc.ServiceDesc{
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "beam_provision_api.proto",
-}
-
-func init() { proto.RegisterFile("beam_provision_api.proto", fileDescriptor1) }
-
-var fileDescriptor1 = []byte{
-	// 469 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x93, 0xcf, 0x6e, 0xd3, 0x40,
-	0x10, 0xc6, 0xe5, 0xc6, 0x18, 0x3a, 0x40, 0x1b, 0xad, 0x80, 0xba, 0x56, 0x91, 0x50, 0x04, 0x12,
-	0xa7, 0x2d, 0x2d, 0x20, 0x6e, 0x20, 0xd2, 0x0a, 0xa8, 0x04, 0xb4, 0xda, 0x9e, 0xe0, 0x62, 0xf9,
-	0xcf, 0x24, 0xdd, 0x34, 0xde, 0x59, 0x76, 0xd7, 0x11, 0xf0, 0x1a, 0xbc, 0x04, 0x8f, 0xc5, 0x89,
-	0xe7, 0x40, 0x5e, 0x3b, 0xa1, 0x05, 0x2a, 0xa5, 0xdc, 0xec, 0xf9, 0xf6, 0xfb, 0x79, 0xbf, 0xf1,
-	0x0c, 0xc4, 0x39, 0x66, 0x55, 0xaa, 0x0d, 0xcd, 0xa4, 0x95, 0xa4, 0xd2, 0x4c, 0x4b, 0xae, 0x0d,
-	0x39, 0x62, 0x0f, 0xc8, 0x8c, 0x79, 0xa6, 0xb3, 0xe2, 0x04, 0x79, 0x73, 0x88, 0x57, 0x54, 0xe2,
-	0x94, 0x8f, 0x54, 0x8a, 0x9f, 0xb1, 0xa8, 0x9d, 0x24, 0xc5, 0x67, 0x3b, 0xc9, 0xd6, 0x98, 0x68,
-	0x3c, 0xc5, 0x6d, 0x6f, 0xca, 0xeb, 0xd1, 0xb6, 0x75, 0xa6, 0x2e, 0x5c, 0x0b, 0x19, 0x6c, 0xc2,
-	0xc6, 0x6b, 0x74, 0x47, 0x73, 0xfc, 0x81, 0x1a, 0x91, 0xc0, 0x4f, 0x35, 0x5a, 0x37, 0x28, 0x21,
-	0xfe, 0x5b, 0xb2, 0x9a, 0x94, 0x45, 0xf6, 0x06, 0x42, 0xa9, 0x46, 0x14, 0x07, 0xf7, 0x82, 0x87,
-	0xd7, 0x77, 0x9f, 0xf0, 0xa5, 0xae, 0xc2, 0xcf, 0xb3, 0x3c, 0x61, 0xf0, 0x23, 0x80, 0x9b, 0xe7,
-	0xea, 0xec, 0x36, 0x44, 0x13, 0xca, 0x53, 0x59, 0x7a, 0xfa, 0xaa, 0xb8, 0x32, 0xa1, 0xfc, 0xa0,
-	0x64, 0x9b, 0x70, 0xad, 0x29, 0xab, 0xac, 0xc2, 0x78, 0xc5, 0x0b, 0x57, 0x27, 0x94, 0xbf, 0xcf,
-	0x2a, 0x64, 0x43, 0xe8, 0x6b, 0xa9, 0x71, 0x2a, 0x15, 0xa6, 0xa4, 0x9b, 0xaf, 0xd9, 0xb8, 0xe7,
-	0x6f, 0xb6, 0xc1, 0xdb, 0xf4, 0x7c, 0x9e, 0x9e, 0x1f, 0xfb, 0xf4, 0x62, 0x7d, 0x6e, 0x38, 0x6c,
-	0xcf, 0xb3, 0x0f, 0xb0, 0x6e, 0xd0, 0x52, 0x6d, 0x0a, 0x4c, 0xa7, 0xb2, 0x92, 0xce, 0xc6, 0xa1,
-	0x47, 0x3c, 0x5a, 0x32, 0x9c, 0xe8, 0xdc, 0x56, 0xac, 0xcd, 0x41, 0x6f, 0x3d, 0x67, 0xf0, 0x73,
-	0x05, 0x56, 0x17, 0x2a, 0x3b, 0x84, 0xa8, 0xc2, 0x8a, 0xcc, 0x97, 0xae, 0x79, 0xcf, 0x2e, 0xcb,
-	0xe7, 0xef, 0xbc, 0x5d, 0x74, 0x18, 0xf6, 0x0a, 0x7a, 0x85, 0xae, 0x7d, 0x4f, 0x96, 0xff, 0x15,
-	0xbf, 0x69, 0x7b, 0xba, 0x16, 0x0d, 0x80, 0x8d, 0xe1, 0x96, 0xc5, 0x4a, 0xa6, 0x1a, 0x8d, 0x95,
-	0xd6, 0xa1, 0x72, 0x69, 0x29, 0xed, 0x69, 0xd7, 0xc9, 0xa7, 0x97, 0x06, 0xef, 0x4b, 0x7b, 0x2a,
-	0x58, 0x83, 0x3c, 0x5a, 0x10, 0x9b, 0x5a, 0xb2, 0x05, 0x51, 0x1b, 0x81, 0x31, 0x08, 0xad, 0xfc,
-	0x8a, 0xbe, 0x13, 0xa1, 0xf0, 0xcf, 0xc9, 0x5d, 0xe8, 0xed, 0xe9, 0x9a, 0xdd, 0x81, 0xc8, 0x9e,
-	0x64, 0x06, 0xad, 0x17, 0x57, 0x44, 0xf7, 0x96, 0x24, 0x10, 0x36, 0x90, 0x7f, 0x59, 0x77, 0xbf,
-	0x07, 0xd0, 0x5f, 0xcc, 0xd2, 0x31, 0x9a, 0x99, 0x2c, 0x90, 0x7d, 0x0b, 0xa0, 0xff, 0xe7, 0x1c,
-	0xb3, 0xe7, 0x4b, 0xa6, 0xb9, 0x60, 0x37, 0x92, 0x17, 0xff, 0xed, 0x6f, 0x17, 0x68, 0xb8, 0x0f,
-	0xf7, 0x2f, 0x22, 0x9c, 0x05, 0x0c, 0x6f, 0x2c, 0xec, 0x2f, 0xb5, 0xfc, 0xb8, 0x76, 0x46, 0x4d,
-	0x67, 0x3b, 0x79, 0xe4, 0xc7, 0xfa, 0xf1, 0xaf, 0x00, 0x00, 0x00, 0xff, 0xff, 0x47, 0x8e, 0xd3,
-	0xc2, 0x25, 0x04, 0x00, 0x00,
 }

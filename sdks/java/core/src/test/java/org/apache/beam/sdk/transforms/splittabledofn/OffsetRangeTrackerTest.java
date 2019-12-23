@@ -38,25 +38,32 @@ public class OffsetRangeTrackerTest {
     OffsetRange range = new OffsetRange(100, 200);
     OffsetRangeTracker tracker = new OffsetRangeTracker(range);
     assertEquals(range, tracker.currentRestriction());
-    assertTrue(tracker.tryClaim(100));
-    assertTrue(tracker.tryClaim(150));
-    assertTrue(tracker.tryClaim(199));
-    assertFalse(tracker.tryClaim(200));
+    assertTrue(tracker.tryClaim(100L));
+    assertTrue(tracker.tryClaim(150L));
+    assertTrue(tracker.tryClaim(199L));
+    assertFalse(tracker.tryClaim(200L));
   }
 
   @Test
   public void testCheckpointUnstarted() throws Exception {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    OffsetRange checkpoint = tracker.checkpoint();
-    assertEquals(new OffsetRange(100, 100), tracker.currentRestriction());
-    assertEquals(new OffsetRange(100, 200), checkpoint);
+    expected.expect(IllegalStateException.class);
+    tracker.trySplit(0).getResidual();
+  }
+
+  @Test
+  public void testCheckpointOnlyFailedClaim() throws Exception {
+    OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
+    assertFalse(tracker.tryClaim(250L));
+    expected.expect(IllegalStateException.class);
+    OffsetRange checkpoint = tracker.trySplit(0).getResidual();
   }
 
   @Test
   public void testCheckpointJustStarted() throws Exception {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(100));
-    OffsetRange checkpoint = tracker.checkpoint();
+    assertTrue(tracker.tryClaim(100L));
+    OffsetRange checkpoint = tracker.trySplit(0).getResidual();
     assertEquals(new OffsetRange(100, 101), tracker.currentRestriction());
     assertEquals(new OffsetRange(101, 200), checkpoint);
   }
@@ -64,9 +71,9 @@ public class OffsetRangeTrackerTest {
   @Test
   public void testCheckpointRegular() throws Exception {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(105));
-    assertTrue(tracker.tryClaim(110));
-    OffsetRange checkpoint = tracker.checkpoint();
+    assertTrue(tracker.tryClaim(105L));
+    assertTrue(tracker.tryClaim(110L));
+    OffsetRange checkpoint = tracker.trySplit(0).getResidual();
     assertEquals(new OffsetRange(100, 111), tracker.currentRestriction());
     assertEquals(new OffsetRange(111, 200), checkpoint);
   }
@@ -74,10 +81,10 @@ public class OffsetRangeTrackerTest {
   @Test
   public void testCheckpointClaimedLast() throws Exception {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(105));
-    assertTrue(tracker.tryClaim(110));
-    assertTrue(tracker.tryClaim(199));
-    OffsetRange checkpoint = tracker.checkpoint();
+    assertTrue(tracker.tryClaim(105L));
+    assertTrue(tracker.tryClaim(110L));
+    assertTrue(tracker.tryClaim(199L));
+    OffsetRange checkpoint = tracker.trySplit(0).getResidual();
     assertEquals(new OffsetRange(100, 200), tracker.currentRestriction());
     assertEquals(new OffsetRange(200, 200), checkpoint);
   }
@@ -85,11 +92,11 @@ public class OffsetRangeTrackerTest {
   @Test
   public void testCheckpointAfterFailedClaim() throws Exception {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(105));
-    assertTrue(tracker.tryClaim(110));
-    assertTrue(tracker.tryClaim(160));
-    assertFalse(tracker.tryClaim(240));
-    OffsetRange checkpoint = tracker.checkpoint();
+    assertTrue(tracker.tryClaim(105L));
+    assertTrue(tracker.tryClaim(110L));
+    assertTrue(tracker.tryClaim(160L));
+    assertFalse(tracker.tryClaim(240L));
+    OffsetRange checkpoint = tracker.trySplit(0).getResidual();
     assertEquals(new OffsetRange(100, 161), tracker.currentRestriction());
     assertEquals(new OffsetRange(161, 200), checkpoint);
   }
@@ -98,50 +105,50 @@ public class OffsetRangeTrackerTest {
   public void testNonMonotonicClaim() throws Exception {
     expected.expectMessage("Trying to claim offset 103 while last attempted was 110");
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(105));
-    assertTrue(tracker.tryClaim(110));
-    tracker.tryClaim(103);
+    assertTrue(tracker.tryClaim(105L));
+    assertTrue(tracker.tryClaim(110L));
+    tracker.tryClaim(103L);
   }
 
   @Test
   public void testClaimBeforeStartOfRange() throws Exception {
     expected.expectMessage("Trying to claim offset 90 before start of the range [100, 200)");
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    tracker.tryClaim(90);
+    tracker.tryClaim(90L);
   }
 
   @Test
   public void testCheckDoneAfterTryClaimPastEndOfRange() {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(150));
-    assertTrue(tracker.tryClaim(175));
-    assertFalse(tracker.tryClaim(220));
+    assertTrue(tracker.tryClaim(150L));
+    assertTrue(tracker.tryClaim(175L));
+    assertFalse(tracker.tryClaim(220L));
     tracker.checkDone();
   }
 
   @Test
   public void testCheckDoneAfterTryClaimAtEndOfRange() {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(150));
-    assertTrue(tracker.tryClaim(175));
-    assertFalse(tracker.tryClaim(200));
+    assertTrue(tracker.tryClaim(150L));
+    assertTrue(tracker.tryClaim(175L));
+    assertFalse(tracker.tryClaim(200L));
     tracker.checkDone();
   }
 
   @Test
   public void testCheckDoneAfterTryClaimRightBeforeEndOfRange() {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(150));
-    assertTrue(tracker.tryClaim(175));
-    assertTrue(tracker.tryClaim(199));
+    assertTrue(tracker.tryClaim(150L));
+    assertTrue(tracker.tryClaim(175L));
+    assertTrue(tracker.tryClaim(199L));
     tracker.checkDone();
   }
 
   @Test
   public void testCheckDoneWhenNotDone() {
     OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(150));
-    assertTrue(tracker.tryClaim(175));
+    assertTrue(tracker.tryClaim(150L));
+    assertTrue(tracker.tryClaim(175L));
     expected.expectMessage(
         "Last attempted offset was 175 in range [100, 200), "
             + "claiming work in [176, 200) was not attempted");
@@ -149,11 +156,33 @@ public class OffsetRangeTrackerTest {
   }
 
   @Test
-  public void testCheckDoneWhenExplicitlyMarkedDone() {
-    OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
-    assertTrue(tracker.tryClaim(150));
-    assertTrue(tracker.tryClaim(175));
-    tracker.markDone();
-    tracker.checkDone();
+  public void testBacklogUnstarted() {
+    OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(0, 200));
+    assertEquals(200, tracker.getSize(), 0.001);
+
+    tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
+    assertEquals(100, tracker.getSize(), 0.001);
+  }
+
+  @Test
+  public void testBacklogFinished() {
+    OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(0, 200));
+    tracker.tryClaim(300L);
+    assertEquals(0, tracker.getSize(), 0.001);
+
+    tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
+    tracker.tryClaim(300L);
+    assertEquals(0., tracker.getSize(), 0.001);
+  }
+
+  @Test
+  public void testBacklogPartiallyCompleted() {
+    OffsetRangeTracker tracker = new OffsetRangeTracker(new OffsetRange(0, 200));
+    tracker.tryClaim(150L);
+    assertEquals(50., tracker.getSize(), 0.001);
+
+    tracker = new OffsetRangeTracker(new OffsetRange(100, 200));
+    tracker.tryClaim(150L);
+    assertEquals(50., tracker.getSize(), 0.001);
   }
 }

@@ -50,20 +50,19 @@ import org.joda.time.Duration;
 @Deprecated
 public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollection<KV<K, V>>> {
 
-  private Reshuffle() {
-  }
+  private Reshuffle() {}
 
   public static <K, V> Reshuffle<K, V> of() {
-    return new Reshuffle<K, V>();
+    return new Reshuffle<>();
   }
 
   /**
-   * Encapsulates the sequence "pair input with unique key, apply {@link
-   * Reshuffle#of}, drop the key" commonly used to break fusion.
+   * Encapsulates the sequence "pair input with unique key, apply {@link Reshuffle#of}, drop the
+   * key" commonly used to break fusion.
    */
   @Experimental
   public static <T> ViaRandomKey<T> viaRandomKey() {
-    return new ViaRandomKey<T>();
+    return new ViaRandomKey<>();
   }
 
   @Override
@@ -84,8 +83,8 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
 
     return input
         .apply(rewindow)
-        .apply("ReifyOriginalTimestamps", Reify.<K, V>timestampsInValue())
-        .apply(GroupByKey.<K, TimestampedValue<V>>create())
+        .apply("ReifyOriginalTimestamps", Reify.timestampsInValue())
+        .apply(GroupByKey.create())
         // Set the windowing strategy directly, so that it doesn't get counted as the user having
         // set allowed lateness.
         .setWindowingStrategyInternal(originalStrategy)
@@ -94,16 +93,16 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
             ParDo.of(
                 new DoFn<KV<K, Iterable<TimestampedValue<V>>>, KV<K, TimestampedValue<V>>>() {
                   @ProcessElement
-                  public void processElement(ProcessContext c) {
-                    K key = c.element().getKey();
-                    for (TimestampedValue<V> value : c.element().getValue()) {
-                      c.output(KV.of(key, value));
+                  public void processElement(
+                      @Element KV<K, Iterable<TimestampedValue<V>>> element,
+                      OutputReceiver<KV<K, TimestampedValue<V>>> r) {
+                    K key = element.getKey();
+                    for (TimestampedValue<V> value : element.getValue()) {
+                      r.output(KV.of(key, value));
                     }
                   }
                 }))
-        .apply(
-            "RestoreOriginalTimestamps",
-            ReifyTimestamps.<K, V>extractFromValues());
+        .apply("RestoreOriginalTimestamps", ReifyTimestamps.extractFromValues());
   }
 
   /** Implementation of {@link #viaRandomKey()}. */
@@ -113,9 +112,9 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
     @Override
     public PCollection<T> expand(PCollection<T> input) {
       return input
-          .apply("Pair with random key", ParDo.of(new AssignShardFn<T>()))
-          .apply(Reshuffle.<Integer, T>of())
-          .apply(Values.<T>create());
+          .apply("Pair with random key", ParDo.of(new AssignShardFn<>()))
+          .apply(Reshuffle.of())
+          .apply(Values.create());
     }
 
     private static class AssignShardFn<T> extends DoFn<T, KV<Integer, T>> {
@@ -127,7 +126,7 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
       }
 
       @ProcessElement
-      public void processElement(ProcessContext context) {
+      public void processElement(@Element T element, OutputReceiver<KV<Integer, T>> r) {
         ++shard;
         // Smear the shard into something more random-looking, to avoid issues
         // with runners that don't properly hash the key being shuffled, but rely
@@ -135,9 +134,10 @@ public class Reshuffle<K, V> extends PTransform<PCollection<KV<K, V>>, PCollecti
         // which for Integer is a no-op and it is an issue:
         // http://hydronitrogen.com/poor-hash-partitioning-of-timestamps-integers-and-longs-in-
         // spark.html
-        // This hashing strategy is copied from com.google.common.collect.Hashing.smear().
+        // This hashing strategy is copied from
+        // org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Hashing.smear().
         int hashOfShard = 0x1b873593 * Integer.rotateLeft(shard * 0xcc9e2d51, 15);
-        context.output(KV.of(hashOfShard, context.element()));
+        r.output(KV.of(hashOfShard, element));
       }
     }
   }

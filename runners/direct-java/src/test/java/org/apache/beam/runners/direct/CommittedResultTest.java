@@ -15,17 +15,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.direct;
 
 import static org.junit.Assert.assertThat;
 
-import com.google.common.base.Optional;
-import com.google.common.collect.ImmutableList;
 import java.io.Serializable;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Optional;
 import org.apache.beam.runners.direct.CommittedResult.OutputType;
 import org.apache.beam.sdk.coders.VarIntCoder;
 import org.apache.beam.sdk.runners.AppliedPTransform;
@@ -37,6 +35,7 @@ import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
 import org.apache.beam.sdk.values.WindowingStrategy;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 import org.hamcrest.Matchers;
 import org.joda.time.Instant;
 import org.junit.Rule;
@@ -44,9 +43,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@link CommittedResult}.
- */
+/** Tests for {@link CommittedResult}. */
 @RunWith(JUnit4.class)
 public class CommittedResultTest implements Serializable {
 
@@ -70,46 +67,43 @@ public class CommittedResultTest implements Serializable {
 
   @Test
   public void getTransformExtractsFromResult() {
-    CommittedResult result =
+    CommittedResult<AppliedPTransform<?, ?, ?>> result =
         CommittedResult.create(
             StepTransformResult.withoutHold(transform).build(),
-            Optional.<CommittedBundle<?>>absent(),
-            Collections.<CommittedBundle<?>>emptyList(),
+            Optional.empty(),
+            Collections.emptyList(),
             EnumSet.noneOf(OutputType.class));
 
-    assertThat(result.getTransform(), Matchers.<AppliedPTransform<?, ?, ?>>equalTo(transform));
+    assertThat(result.getExecutable(), Matchers.<AppliedPTransform<?, ?, ?>>equalTo(transform));
   }
 
   @Test
   public void getUncommittedElementsEqualInput() {
     CommittedBundle<Integer> bundle =
-        bundleFactory.createBundle(created)
+        bundleFactory
+            .createBundle(created)
             .add(WindowedValue.valueInGlobalWindow(2))
             .commit(Instant.now());
-    CommittedResult result =
+    CommittedResult<AppliedPTransform<?, ?, ?>> result =
         CommittedResult.create(
             StepTransformResult.withoutHold(transform).build(),
             Optional.of(bundle),
-            Collections.<CommittedBundle<?>>emptyList(),
+            Collections.emptyList(),
             EnumSet.noneOf(OutputType.class));
 
-    assertThat(result.getUnprocessedInputs().get(),
-        Matchers.<CommittedBundle<?>>equalTo(bundle));
+    assertThat(result.getUnprocessedInputs().get(), Matchers.equalTo(bundle));
   }
 
   @Test
   public void getUncommittedElementsNull() {
-    CommittedResult result =
+    CommittedResult<AppliedPTransform<?, ?, ?>> result =
         CommittedResult.create(
             StepTransformResult.withoutHold(transform).build(),
-            Optional.<CommittedBundle<?>>absent(),
-            Collections.<CommittedBundle<?>>emptyList(),
+            Optional.empty(),
+            Collections.emptyList(),
             EnumSet.noneOf(OutputType.class));
 
-    assertThat(
-        result.getUnprocessedInputs(),
-        Matchers.<Optional<? extends CommittedBundle<?>>>equalTo(
-            Optional.<CommittedBundle<?>>absent()));
+    assertThat(result.getUnprocessedInputs(), Matchers.equalTo(Optional.empty()));
   }
 
   @Test
@@ -132,10 +126,10 @@ public class CommittedResultTest implements Serializable {
                         PCollection.IsBounded.UNBOUNDED,
                         VarIntCoder.of()))
                 .commit(Instant.now()));
-    CommittedResult result =
+    CommittedResult<AppliedPTransform<?, ?, ?>> result =
         CommittedResult.create(
             StepTransformResult.withoutHold(transform).build(),
-            Optional.<CommittedBundle<?>>absent(),
+            Optional.empty(),
             outputs,
             EnumSet.of(OutputType.BUNDLE, OutputType.PCOLLECTION_VIEW));
 

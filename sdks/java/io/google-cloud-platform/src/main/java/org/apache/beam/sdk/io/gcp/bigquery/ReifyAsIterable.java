@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.sdk.io.gcp.bigquery;
 
 import org.apache.beam.sdk.coders.VoidCoder;
@@ -34,7 +33,7 @@ import org.apache.beam.sdk.values.PCollectionView;
 public class ReifyAsIterable<T> extends PTransform<PCollection<T>, PCollection<Iterable<T>>> {
   @Override
   public PCollection<Iterable<T>> expand(PCollection<T> input) {
-    final PCollectionView<Iterable<T>> view = input.apply(View.<T>asIterable());
+    final PCollectionView<Iterable<T>> view = input.apply(View.asIterable());
     return input
         .getPipeline()
         .apply(Create.of((Void) null).withCoder(VoidCoder.of()))

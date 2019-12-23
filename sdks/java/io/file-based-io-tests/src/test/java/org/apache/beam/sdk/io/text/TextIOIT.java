@@ -15,36 +15,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.sdk.io.text;
 
-import static org.apache.beam.sdk.io.Compression.AUTO;
+import static org.apache.beam.sdk.io.FileIO.ReadMatches.DirectoryTreatment;
+import static org.apache.beam.sdk.io.common.FileBasedIOITHelper.appendTimestampSuffix;
+import static org.apache.beam.sdk.io.common.FileBasedIOITHelper.readFileBasedIOITPipelineOptions;
 
-import com.google.common.base.Function;
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Iterables;
-
-import java.io.IOException;
-import java.text.ParseException;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Date;
-import java.util.Map;
-
+import com.google.cloud.Timestamp;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.UUID;
+import java.util.function.Function;
+import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.io.Compression;
-import org.apache.beam.sdk.io.FileSystems;
+import org.apache.beam.sdk.io.FileIO;
 import org.apache.beam.sdk.io.GenerateSequence;
 import org.apache.beam.sdk.io.TextIO;
+import org.apache.beam.sdk.io.common.FileBasedIOITHelper;
+import org.apache.beam.sdk.io.common.FileBasedIOITHelper.DeleteFileFn;
+import org.apache.beam.sdk.io.common.FileBasedIOTestPipelineOptions;
 import org.apache.beam.sdk.io.common.HashingFn;
-import org.apache.beam.sdk.io.common.IOTestPipelineOptions;
-import org.apache.beam.sdk.io.fs.MatchResult;
-import org.apache.beam.sdk.io.fs.ResourceId;
-import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
+import org.apache.beam.sdk.testutils.NamedTestResult;
+import org.apache.beam.sdk.testutils.metrics.IOITMetrics;
+import org.apache.beam.sdk.testutils.metrics.MetricsReader;
+import org.apache.beam.sdk.testutils.metrics.TimeMonitor;
 import org.apache.beam.sdk.transforms.Combine;
-import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.Values;
 import org.apache.beam.sdk.transforms.View;
@@ -54,126 +51,163 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Integration tests for {@link org.apache.beam.sdk.io.TextIO}.
  *
  * <p>Run this test using the command below. Pass in connection information via PipelineOptions:
+ *
  * <pre>
- *  mvn -e -Pio-it verify -pl sdks/java/io/file-based-io-tests
- *  -Dit.test=org.apache.beam.sdk.io.text.TextIOIT
+ *  ./gradlew integrationTest -p sdks/java/io/file-based-io-tests
  *  -DintegrationTestPipelineOptions='[
  *  "--numberOfRecords=100000",
- *  "--filenamePrefix=TEXTIOIT"
+ *  "--datasetSize=12345",
+ *  "--expectedHash=99f23ab",
+ *  "--filenamePrefix=output_file_path",
  *  "--compressionType=GZIP"
  *  ]'
+ *  --tests org.apache.beam.sdk.io.text.TextIOIT
+ *  -DintegrationTestRunner=direct
  * </pre>
- * </p>
- * <p>Please see 'sdks/java/io/file-based-io-tests/pom.xml' for instructions regarding
- * running this test using Beam performance testing framework.</p>
- * */
+ *
+ * <p>Please see 'build_rules.gradle' file for instructions regarding running this test using Beam
+ * performance testing framework.
+ */
 @RunWith(JUnit4.class)
 public class TextIOIT {
+  private static final Logger LOG = LoggerFactory.getLogger(TextIOIT.class);
 
   private static String filenamePrefix;
-  private static Long numberOfTextLines;
+  private static Integer numberOfTextLines;
+  private static Integer datasetSize;
+  private static String expectedHash;
   private static Compression compressionType;
+  private static Integer numShards;
+  private static String bigQueryDataset;
+  private static String bigQueryTable;
+  private static boolean gatherGcsPerformanceMetrics;
+  private static final String FILEIOIT_NAMESPACE = TextIOIT.class.getName();
 
-  @Rule
-  public TestPipeline pipeline = TestPipeline.create();
+  @Rule public TestPipeline pipeline = TestPipeline.create();
 
   @BeforeClass
-  public static void setup() throws ParseException {
-    PipelineOptionsFactory.register(IOTestPipelineOptions.class);
-    IOTestPipelineOptions options = TestPipeline.testingPipelineOptions()
-        .as(IOTestPipelineOptions.class);
-
+  public static void setup() {
+    FileBasedIOTestPipelineOptions options = readFileBasedIOITPipelineOptions();
+    datasetSize = options.getDatasetSize();
+    expectedHash = options.getExpectedHash();
     numberOfTextLines = options.getNumberOfRecords();
-    filenamePrefix = appendTimestamp(options.getFilenamePrefix());
-    compressionType = parseCompressionType(options.getCompressionType());
-  }
-
-  private static Compression parseCompressionType(String compressionType) {
-    try {
-      return Compression.valueOf(compressionType.toUpperCase());
-    } catch (IllegalArgumentException ex) {
-      throw new IllegalArgumentException(
-          String.format("Unsupported compression type: %s", compressionType));
-    }
-  }
-
-  private static String appendTimestamp(String filenamePrefix) {
-    return String.format("%s_%s", filenamePrefix, new Date().getTime());
+    compressionType = Compression.valueOf(options.getCompressionType());
+    filenamePrefix = appendTimestampSuffix(options.getFilenamePrefix());
+    numShards = options.getNumberOfShards();
+    bigQueryDataset = options.getBigQueryDataset();
+    bigQueryTable = options.getBigQueryTable();
+    gatherGcsPerformanceMetrics = options.getReportGcsPerformanceMetrics();
   }
 
   @Test
   public void writeThenReadAll() {
-    TextIO.TypedWrite<String, Object> write = TextIO
-        .write()
-        .to(filenamePrefix)
-        .withOutputFilenames()
-        .withCompression(compressionType);
+    TextIO.TypedWrite<String, Object> write =
+        TextIO.write().to(filenamePrefix).withOutputFilenames().withCompression(compressionType);
+    if (numShards != null) {
+      write = write.withNumShards(numShards);
+    }
 
-    PCollection<String> testFilenames = pipeline
-        .apply("Generate sequence", GenerateSequence.from(0).to(numberOfTextLines))
-        .apply("Produce text lines", ParDo.of(new DeterministicallyConstructTestTextLineFn()))
-        .apply("Write content to files", write)
-        .getPerDestinationOutputFilenames().apply(Values.<String>create());
+    PCollection<String> testFilenames =
+        pipeline
+            .apply("Generate sequence", GenerateSequence.from(0).to(numberOfTextLines))
+            .apply(
+                "Produce text lines",
+                ParDo.of(new FileBasedIOITHelper.DeterministicallyConstructTestTextLineFn()))
+            .apply(
+                "Collect write start time",
+                ParDo.of(new TimeMonitor<>(FILEIOIT_NAMESPACE, "startTime")))
+            .apply("Write content to files", write)
+            .getPerDestinationOutputFilenames()
+            .apply(Values.create())
+            .apply(
+                "Collect write end time",
+                ParDo.of(new TimeMonitor<>(FILEIOIT_NAMESPACE, "middleTime")));
 
-    PCollection<String> consolidatedHashcode = testFilenames
-        .apply("Read all files", TextIO.readAll().withCompression(AUTO))
-        .apply("Calculate hashcode", Combine.globally(new HashingFn()));
+    PCollection<String> consolidatedHashcode =
+        testFilenames
+            .apply("Match all files", FileIO.matchAll())
+            .apply(
+                "Read matches",
+                FileIO.readMatches().withDirectoryTreatment(DirectoryTreatment.PROHIBIT))
+            .apply("Read files", TextIO.readFiles())
+            .apply(
+                "Collect read end time", ParDo.of(new TimeMonitor<>(FILEIOIT_NAMESPACE, "endTime")))
+            .apply("Calculate hashcode", Combine.globally(new HashingFn()));
 
-    String expectedHash = getExpectedHashForLineCount(numberOfTextLines);
     PAssert.thatSingleton(consolidatedHashcode).isEqualTo(expectedHash);
 
-    testFilenames.apply("Delete test files", ParDo.of(new DeleteFileFn())
-        .withSideInputs(consolidatedHashcode.apply(View.<String>asSingleton())));
+    testFilenames.apply(
+        "Delete test files",
+        ParDo.of(new DeleteFileFn())
+            .withSideInputs(consolidatedHashcode.apply(View.asSingleton())));
 
-    pipeline.run().waitUntilFinish();
+    PipelineResult result = pipeline.run();
+    result.waitUntilFinish();
+
+    collectAndPublishMetrics(result);
   }
 
-  private static String getExpectedHashForLineCount(Long lineCount) {
-    Map<Long, String> expectedHashes = ImmutableMap.of(
-        100_000L, "4c8bb3b99dcc59459b20fefba400d446",
-        1_000_000L, "9796db06e7a7960f974d5a91164afff1",
-        100_000_000L, "6ce05f456e2fdc846ded2abd0ec1de95"
-    );
+  private void collectAndPublishMetrics(PipelineResult result) {
+    String uuid = UUID.randomUUID().toString();
+    Timestamp timestamp = Timestamp.now();
 
-    String hash = expectedHashes.get(lineCount);
-    if (hash == null) {
-      throw new UnsupportedOperationException(
-          String.format("No hash for that line count: %s", lineCount));
-    }
-    return hash;
+    Set<Function<MetricsReader, NamedTestResult>> metricSuppliers =
+        fillMetricSuppliers(uuid, timestamp.toString());
+
+    new IOITMetrics(metricSuppliers, result, FILEIOIT_NAMESPACE, uuid, timestamp.toString())
+        .publish(bigQueryDataset, bigQueryTable);
   }
 
-  private static class DeterministicallyConstructTestTextLineFn extends DoFn<Long, String> {
+  private Set<Function<MetricsReader, NamedTestResult>> fillMetricSuppliers(
+      String uuid, String timestamp) {
+    Set<Function<MetricsReader, NamedTestResult>> metricSuppliers = new HashSet<>();
 
-    @ProcessElement
-    public void processElement(ProcessContext c) {
-      c.output(String.format("IO IT Test line of text. Line seed: %s", c.element()));
+    metricSuppliers.add(
+        (reader) -> {
+          long writeStartTime = reader.getStartTimeMetric("startTime");
+          long writeEndTime = reader.getEndTimeMetric("middleTime");
+          double writeTime = (writeEndTime - writeStartTime) / 1e3;
+          return NamedTestResult.create(uuid, timestamp, "write_time", writeTime);
+        });
+
+    metricSuppliers.add(
+        (reader) -> {
+          long readStartTime = reader.getStartTimeMetric("middleTime");
+          long readEndTime = reader.getEndTimeMetric("endTime");
+          double readTime = (readEndTime - readStartTime) / 1e3;
+          return NamedTestResult.create(uuid, timestamp, "read_time", readTime);
+        });
+
+    metricSuppliers.add(
+        (reader) -> {
+          long writeStartTime = reader.getStartTimeMetric("startTime");
+          long readEndTime = reader.getEndTimeMetric("endTime");
+          double runTime = (readEndTime - writeStartTime) / 1e3;
+          return NamedTestResult.create(uuid, timestamp, "run_time", runTime);
+        });
+    if (datasetSize != null) {
+      metricSuppliers.add(
+          (ignored) -> NamedTestResult.create(uuid, timestamp, "dataset_size", datasetSize));
     }
-  }
-
-  private static class DeleteFileFn extends DoFn<String, Void> {
-
-    @ProcessElement
-    public void processElement(ProcessContext c) throws IOException {
-      MatchResult match = Iterables
-          .getOnlyElement(FileSystems.match(Collections.singletonList(c.element())));
-      FileSystems.delete(toResourceIds(match));
+    if (gatherGcsPerformanceMetrics) {
+      metricSuppliers.add(
+          reader -> {
+            MetricsReader actualReader =
+                reader.withNamespace("org.apache.beam.sdk.extensions.gcp.storage.GcsFileSystem");
+            long numCopies = actualReader.getCounterMetric("num_copies");
+            long copyTimeMsec = actualReader.getCounterMetric("copy_time_msec");
+            double copiesPerSec =
+                (numCopies < 0 || copyTimeMsec < 0) ? -1 : numCopies / (copyTimeMsec / 1e3);
+            return NamedTestResult.create(uuid, timestamp, "copies_per_sec", copiesPerSec);
+          });
     }
-
-    private Collection<ResourceId> toResourceIds(MatchResult match) throws IOException {
-      return FluentIterable.from(match.metadata())
-          .transform(new Function<MatchResult.Metadata, ResourceId>() {
-
-            @Override
-            public ResourceId apply(MatchResult.Metadata metadata) {
-              return metadata.resourceId();
-            }
-          }).toList();
-    }
+    return metricSuppliers;
   }
 }

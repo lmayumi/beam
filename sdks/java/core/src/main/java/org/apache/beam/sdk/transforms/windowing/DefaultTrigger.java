@@ -34,9 +34,7 @@ public class DefaultTrigger extends Trigger {
     super();
   }
 
-  /**
-   * Returns the default trigger.
-   */
+  /** Returns the default trigger. */
   public static DefaultTrigger of() {
     return new DefaultTrigger();
   }
@@ -44,6 +42,12 @@ public class DefaultTrigger extends Trigger {
   @Override
   public Instant getWatermarkThatGuaranteesFiring(BoundedWindow window) {
     return window.maxTimestamp();
+  }
+
+  /** @return false; the default trigger never finishes */
+  @Override
+  public boolean mayFinish() {
+    return false;
   }
 
   @Override

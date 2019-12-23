@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.apex.translation;
 
 import static org.junit.Assert.assertEquals;
@@ -26,7 +25,6 @@ import com.datatorrent.api.DAG;
 import com.datatorrent.api.DAG.OperatorMeta;
 import com.datatorrent.stram.engine.PortContext;
 import com.datatorrent.stram.plan.logical.LogicalPlan;
-import com.google.common.collect.ImmutableList;
 import java.io.Serializable;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +52,7 @@ import org.apache.beam.sdk.util.WindowedValue.FullWindowedValueCoder;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -78,7 +77,7 @@ public class SideInputTranslationTest implements Serializable {
     final PCollectionView<Map<String, Integer>> view =
         pipeline
             .apply("CreateSideInput", Create.of(KV.of("a", 1), KV.of("b", 3)))
-            .apply(View.<String, Integer>asMap());
+            .apply(View.asMap());
 
     PCollection<KV<String, Integer>> output =
         pipeline
@@ -114,7 +113,7 @@ public class SideInputTranslationTest implements Serializable {
   public void testListSideInputTranslation() throws Exception {
     assertEquals(
         ListCoder.of(KvCoder.of(VoidCoder.of(), VarIntCoder.of())),
-        getTranslatedSideInputCoder(ImmutableList.of(11, 13, 17, 23), View.<Integer>asList()));
+        getTranslatedSideInputCoder(ImmutableList.of(11, 13, 17, 23), View.asList()));
   }
 
   @Test
@@ -122,8 +121,7 @@ public class SideInputTranslationTest implements Serializable {
     assertEquals(
         ListCoder.of(
             KvCoder.of(VoidCoder.of(), KvCoder.of(StringUtf8Coder.of(), VarIntCoder.of()))),
-        getTranslatedSideInputCoder(
-            ImmutableList.of(KV.of("a", 1), KV.of("b", 3)), View.<String, Integer>asMap()));
+        getTranslatedSideInputCoder(ImmutableList.of(KV.of("a", 1), KV.of("b", 3)), View.asMap()));
   }
 
   @Test
@@ -132,8 +130,7 @@ public class SideInputTranslationTest implements Serializable {
         ListCoder.of(
             KvCoder.of(VoidCoder.of(), KvCoder.of(StringUtf8Coder.of(), VarIntCoder.of()))),
         getTranslatedSideInputCoder(
-            ImmutableList.of(KV.of("a", 1), KV.of("a", 2), KV.of("b", 3)),
-            View.<String, Integer>asMultimap()));
+            ImmutableList.of(KV.of("a", 1), KV.of("a", 2), KV.of("b", 3)), View.asMultimap()));
   }
 
   private <T> Coder<?> getTranslatedSideInputCoder(
@@ -159,7 +156,7 @@ public class SideInputTranslationTest implements Serializable {
 
     DAG.InputPortMeta sideInput = null;
     for (DAG.InputPortMeta input : om.getInputStreams().keySet()) {
-      if (((LogicalPlan.InputPortMeta) input).getPortName().equals("sideInput1")) {
+      if ("sideInput1".equals(((LogicalPlan.InputPortMeta) input).getPortName())) {
         sideInput = input;
       }
     }

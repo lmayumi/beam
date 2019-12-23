@@ -15,53 +15,60 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.fn.harness;
 
 import static org.apache.beam.sdk.util.WindowedValue.valueInGlobalWindow;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.empty;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 
-import com.google.common.base.Suppliers;
-import com.google.common.collect.HashMultimap;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Multimap;
-import com.google.common.util.concurrent.Uninterruptibles;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.ServiceLoader;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.beam.fn.harness.PTransformRunnerFactory.Registrar;
 import org.apache.beam.fn.harness.data.BeamFnDataClient;
-import org.apache.beam.fn.harness.fn.ThrowingConsumer;
-import org.apache.beam.fn.harness.fn.ThrowingRunnable;
+import org.apache.beam.fn.harness.data.MultiplexingFnDataReceiver;
+import org.apache.beam.fn.harness.data.PCollectionConsumerRegistry;
+import org.apache.beam.fn.harness.data.PTransformFunctionRegistry;
 import org.apache.beam.model.fnexecution.v1.BeamFnApi;
 import org.apache.beam.model.pipeline.v1.Endpoints;
 import org.apache.beam.model.pipeline.v1.RunnerApi;
 import org.apache.beam.model.pipeline.v1.RunnerApi.MessageWithComponents;
 import org.apache.beam.runners.core.construction.CoderTranslation;
+import org.apache.beam.runners.core.metrics.ExecutionStateTracker;
+import org.apache.beam.runners.core.metrics.MetricsContainerStepMap;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.fn.data.CompletableFutureInboundDataClient;
+import org.apache.beam.sdk.fn.data.FnDataReceiver;
+import org.apache.beam.sdk.fn.data.InboundDataClient;
+import org.apache.beam.sdk.fn.data.LogicalEndpoint;
+import org.apache.beam.sdk.fn.data.RemoteGrpcPortRead;
 import org.apache.beam.sdk.fn.test.TestExecutors;
 import org.apache.beam.sdk.fn.test.TestExecutors.TestExecutorService;
+import org.apache.beam.sdk.function.ThrowingRunnable;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.util.WindowedValue;
-import org.apache.beam.sdk.values.KV;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Suppliers;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.util.concurrent.Uninterruptibles;
 import org.hamcrest.collection.IsMapContaining;
 import org.junit.Before;
 import org.junit.Rule;
@@ -77,16 +84,18 @@ import org.mockito.MockitoAnnotations;
 @RunWith(JUnit4.class)
 public class BeamFnDataReadRunnerTest {
 
-  private static final BeamFnApi.RemoteGrpcPort PORT_SPEC = BeamFnApi.RemoteGrpcPort.newBuilder()
-      .setApiServiceDescriptor(Endpoints.ApiServiceDescriptor.getDefaultInstance()).build();
-  private static final RunnerApi.FunctionSpec FUNCTION_SPEC = RunnerApi.FunctionSpec.newBuilder()
-      .setPayload(PORT_SPEC.toByteString()).build();
+  private static final Coder<String> ELEMENT_CODER = StringUtf8Coder.of();
+  private static final String ELEMENT_CODER_SPEC_ID = "string-coder-id";
   private static final Coder<WindowedValue<String>> CODER =
-      WindowedValue.getFullCoder(StringUtf8Coder.of(), GlobalWindow.Coder.INSTANCE);
-  private static final String CODER_SPEC_ID = "string-coder-id";
+      WindowedValue.getFullCoder(ELEMENT_CODER, GlobalWindow.Coder.INSTANCE);
+  private static final String CODER_SPEC_ID = "windowed-string-coder-id";
   private static final RunnerApi.Coder CODER_SPEC;
   private static final RunnerApi.Components COMPONENTS;
-  private static final String URN = "urn:org.apache.beam:source:runner:0.1";
+  private static final BeamFnApi.RemoteGrpcPort PORT_SPEC =
+      BeamFnApi.RemoteGrpcPort.newBuilder()
+          .setApiServiceDescriptor(Endpoints.ApiServiceDescriptor.getDefaultInstance())
+          .setCoderId(CODER_SPEC_ID)
+          .build();
 
   static {
     try {
@@ -97,19 +106,18 @@ public class BeamFnDataReadRunnerTest {
               .getComponents()
               .toBuilder()
               .putCoders(CODER_SPEC_ID, CODER_SPEC)
+              .putCoders(ELEMENT_CODER_SPEC_ID, CoderTranslation.toProto(ELEMENT_CODER).getCoder())
               .build();
     } catch (IOException e) {
       throw new ExceptionInInitializerError(e);
     }
   }
-  private static final BeamFnApi.Target INPUT_TARGET = BeamFnApi.Target.newBuilder()
-      .setPrimitiveTransformReference("1")
-      .setName("out")
-      .build();
+
+  private static final String INPUT_TRANSFORM_ID = "1";
 
   @Rule public TestExecutorService executor = TestExecutors.from(Executors::newCachedThreadPool);
   @Mock private BeamFnDataClient mockBeamFnDataClient;
-  @Captor private ArgumentCaptor<ThrowingConsumer<WindowedValue<String>>> consumerCaptor;
+  @Captor private ArgumentCaptor<FnDataReceiver<WindowedValue<String>>> consumerCaptor;
 
   @Before
   public void setUp() {
@@ -119,115 +127,124 @@ public class BeamFnDataReadRunnerTest {
   @Test
   public void testCreatingAndProcessingBeamFnDataReadRunner() throws Exception {
     String bundleId = "57";
-    String outputId = "101";
 
     List<WindowedValue<String>> outputValues = new ArrayList<>();
 
-    Multimap<String, ThrowingConsumer<WindowedValue<?>>> consumers = HashMultimap.create();
-    consumers.put("outputPC",
-        (ThrowingConsumer) (ThrowingConsumer<WindowedValue<String>>) outputValues::add);
-    List<ThrowingRunnable> startFunctions = new ArrayList<>();
-    List<ThrowingRunnable> finishFunctions = new ArrayList<>();
+    MetricsContainerStepMap metricsContainerRegistry = new MetricsContainerStepMap();
+    PCollectionConsumerRegistry consumers =
+        new PCollectionConsumerRegistry(
+            metricsContainerRegistry, mock(ExecutionStateTracker.class));
+    String localOutputId = "outputPC";
+    String pTransformId = "pTransformId";
+    consumers.register(
+        localOutputId,
+        pTransformId,
+        (FnDataReceiver) (FnDataReceiver<WindowedValue<String>>) outputValues::add);
+    PTransformFunctionRegistry startFunctionRegistry =
+        new PTransformFunctionRegistry(
+            mock(MetricsContainerStepMap.class), mock(ExecutionStateTracker.class), "start");
+    PTransformFunctionRegistry finishFunctionRegistry =
+        new PTransformFunctionRegistry(
+            mock(MetricsContainerStepMap.class), mock(ExecutionStateTracker.class), "finish");
+    List<ThrowingRunnable> teardownFunctions = new ArrayList<>();
 
-    RunnerApi.FunctionSpec functionSpec = RunnerApi.FunctionSpec.newBuilder()
-        .setUrn("urn:org.apache.beam:source:runner:0.1")
-        .setPayload(PORT_SPEC.toByteString())
-        .build();
+    RunnerApi.PTransform pTransform =
+        RemoteGrpcPortRead.readFromPort(PORT_SPEC, localOutputId).toPTransform();
 
-    RunnerApi.PTransform pTransform = RunnerApi.PTransform.newBuilder()
-        .setSpec(functionSpec)
-        .putOutputs(outputId, "outputPC")
-        .build();
+    new BeamFnDataReadRunner.Factory<String>()
+        .createRunnerForPTransform(
+            PipelineOptionsFactory.create(),
+            mockBeamFnDataClient,
+            null /* beamFnStateClient */,
+            pTransformId,
+            pTransform,
+            Suppliers.ofInstance(bundleId)::get,
+            ImmutableMap.of(
+                localOutputId,
+                RunnerApi.PCollection.newBuilder().setCoderId(ELEMENT_CODER_SPEC_ID).build()),
+            COMPONENTS.getCodersMap(),
+            COMPONENTS.getWindowingStrategiesMap(),
+            consumers,
+            startFunctionRegistry,
+            finishFunctionRegistry,
+            teardownFunctions::add,
+            null /* splitListener */);
 
-    new BeamFnDataReadRunner.Factory<String>().createRunnerForPTransform(
-        PipelineOptionsFactory.create(),
-        mockBeamFnDataClient,
-        null /* beamFnStateClient */,
-        "pTransformId",
-        pTransform,
-        Suppliers.ofInstance(bundleId)::get,
-        ImmutableMap.of("outputPC",
-            RunnerApi.PCollection.newBuilder().setCoderId(CODER_SPEC_ID).build()),
-        COMPONENTS.getCodersMap(),
-        consumers,
-        startFunctions::add,
-        finishFunctions::add);
+    assertThat(teardownFunctions, empty());
 
     verifyZeroInteractions(mockBeamFnDataClient);
 
-    CompletableFuture<Void> completionFuture = new CompletableFuture<>();
-    when(mockBeamFnDataClient.forInboundConsumer(any(), any(), any(), any()))
-        .thenReturn(completionFuture);
-    Iterables.getOnlyElement(startFunctions).run();
-    verify(mockBeamFnDataClient).forInboundConsumer(
-        eq(PORT_SPEC.getApiServiceDescriptor()),
-        eq(KV.of(bundleId, BeamFnApi.Target.newBuilder()
-            .setPrimitiveTransformReference("pTransformId")
-            .setName(outputId)
-            .build())),
-        eq(CODER),
-        consumerCaptor.capture());
+    InboundDataClient completionFuture = CompletableFutureInboundDataClient.create();
+    when(mockBeamFnDataClient.receive(any(), any(), any(), any())).thenReturn(completionFuture);
+    Iterables.getOnlyElement(startFunctionRegistry.getFunctions()).run();
+    verify(mockBeamFnDataClient)
+        .receive(
+            eq(PORT_SPEC.getApiServiceDescriptor()),
+            eq(LogicalEndpoint.of(bundleId, pTransformId)),
+            eq(CODER),
+            consumerCaptor.capture());
 
     consumerCaptor.getValue().accept(valueInGlobalWindow("TestValue"));
     assertThat(outputValues, contains(valueInGlobalWindow("TestValue")));
     outputValues.clear();
 
-    assertThat(consumers.keySet(), containsInAnyOrder("outputPC"));
+    assertThat(consumers.keySet(), containsInAnyOrder(localOutputId));
 
-    completionFuture.complete(null);
-    Iterables.getOnlyElement(finishFunctions).run();
+    completionFuture.complete();
+    Iterables.getOnlyElement(finishFunctionRegistry.getFunctions()).run();
 
     verifyNoMoreInteractions(mockBeamFnDataClient);
   }
 
   @Test
   public void testReuseForMultipleBundles() throws Exception {
-    CompletableFuture<Void> bundle1Future = new CompletableFuture<>();
-    CompletableFuture<Void> bundle2Future = new CompletableFuture<>();
-    when(mockBeamFnDataClient.forInboundConsumer(
-        any(),
-        any(),
-        any(),
-        any())).thenReturn(bundle1Future).thenReturn(bundle2Future);
+    InboundDataClient bundle1Future = CompletableFutureInboundDataClient.create();
+    InboundDataClient bundle2Future = CompletableFutureInboundDataClient.create();
+    when(mockBeamFnDataClient.receive(any(), any(), any(), any()))
+        .thenReturn(bundle1Future)
+        .thenReturn(bundle2Future);
     List<WindowedValue<String>> valuesA = new ArrayList<>();
     List<WindowedValue<String>> valuesB = new ArrayList<>();
-
+    FnDataReceiver<WindowedValue<String>> consumers =
+        MultiplexingFnDataReceiver.forConsumers(ImmutableList.of(valuesA::add, valuesB::add));
     AtomicReference<String> bundleId = new AtomicReference<>("0");
-    BeamFnDataReadRunner<String> readRunner = new BeamFnDataReadRunner<>(
-        FUNCTION_SPEC,
-        bundleId::get,
-        INPUT_TARGET,
-        CODER_SPEC,
-        COMPONENTS.getCodersMap(),
-        mockBeamFnDataClient,
-        ImmutableList.of(valuesA::add, valuesB::add));
+    BeamFnDataReadRunner<String> readRunner =
+        new BeamFnDataReadRunner<>(
+            INPUT_TRANSFORM_ID,
+            RemoteGrpcPortRead.readFromPort(PORT_SPEC, "localOutput").toPTransform(),
+            bundleId::get,
+            CODER_SPEC,
+            COMPONENTS.getCodersMap(),
+            mockBeamFnDataClient,
+            consumers);
 
     // Process for bundle id 0
     readRunner.registerInputLocation();
 
-    verify(mockBeamFnDataClient).forInboundConsumer(
-        eq(PORT_SPEC.getApiServiceDescriptor()),
-        eq(KV.of(bundleId.get(), INPUT_TARGET)),
-        eq(CODER),
-        consumerCaptor.capture());
+    verify(mockBeamFnDataClient)
+        .receive(
+            eq(PORT_SPEC.getApiServiceDescriptor()),
+            eq(LogicalEndpoint.of(bundleId.get(), INPUT_TRANSFORM_ID)),
+            eq(CODER),
+            consumerCaptor.capture());
 
-    executor.submit(new Runnable() {
-      @Override
-      public void run() {
-        // Sleep for some small amount of time simulating the parent blocking
-        Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-        try {
-          consumerCaptor.getValue().accept(valueInGlobalWindow("ABC"));
-          consumerCaptor.getValue().accept(valueInGlobalWindow("DEF"));
-        } catch (Exception e) {
-          bundle1Future.completeExceptionally(e);
-        } finally {
-          bundle1Future.complete(null);
-        }
-      }
-    });
+    Future<?> future =
+        executor.submit(
+            () -> {
+              // Sleep for some small amount of time simulating the parent blocking
+              Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
+              try {
+                consumerCaptor.getValue().accept(valueInGlobalWindow("ABC"));
+                consumerCaptor.getValue().accept(valueInGlobalWindow("DEF"));
+              } catch (Exception e) {
+                bundle1Future.fail(e);
+              } finally {
+                bundle1Future.complete();
+              }
+            });
 
     readRunner.blockTillReadFinishes();
+    future.get();
     assertThat(valuesA, contains(valueInGlobalWindow("ABC"), valueInGlobalWindow("DEF")));
     assertThat(valuesB, contains(valueInGlobalWindow("ABC"), valueInGlobalWindow("DEF")));
 
@@ -237,29 +254,30 @@ public class BeamFnDataReadRunnerTest {
     valuesB.clear();
     readRunner.registerInputLocation();
 
-    verify(mockBeamFnDataClient).forInboundConsumer(
-        eq(PORT_SPEC.getApiServiceDescriptor()),
-        eq(KV.of(bundleId.get(), INPUT_TARGET)),
-        eq(CODER),
-        consumerCaptor.capture());
+    verify(mockBeamFnDataClient)
+        .receive(
+            eq(PORT_SPEC.getApiServiceDescriptor()),
+            eq(LogicalEndpoint.of(bundleId.get(), INPUT_TRANSFORM_ID)),
+            eq(CODER),
+            consumerCaptor.capture());
 
-    executor.submit(new Runnable() {
-      @Override
-      public void run() {
-        // Sleep for some small amount of time simulating the parent blocking
-        Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-        try {
-          consumerCaptor.getValue().accept(valueInGlobalWindow("GHI"));
-          consumerCaptor.getValue().accept(valueInGlobalWindow("JKL"));
-        } catch (Exception e) {
-          bundle2Future.completeExceptionally(e);
-        } finally {
-          bundle2Future.complete(null);
-        }
-      }
-    });
+    future =
+        executor.submit(
+            () -> {
+              // Sleep for some small amount of time simulating the parent blocking
+              Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
+              try {
+                consumerCaptor.getValue().accept(valueInGlobalWindow("GHI"));
+                consumerCaptor.getValue().accept(valueInGlobalWindow("JKL"));
+              } catch (Exception e) {
+                bundle2Future.fail(e);
+              } finally {
+                bundle2Future.complete();
+              }
+            });
 
     readRunner.blockTillReadFinishes();
+    future.get();
     assertThat(valuesA, contains(valueInGlobalWindow("GHI"), valueInGlobalWindow("JKL")));
     assertThat(valuesB, contains(valueInGlobalWindow("GHI"), valueInGlobalWindow("JKL")));
 
@@ -268,10 +286,11 @@ public class BeamFnDataReadRunnerTest {
 
   @Test
   public void testRegistration() {
-    for (Registrar registrar :
-        ServiceLoader.load(Registrar.class)) {
+    for (Registrar registrar : ServiceLoader.load(Registrar.class)) {
       if (registrar instanceof BeamFnDataReadRunner.Registrar) {
-        assertThat(registrar.getPTransformRunnerFactories(), IsMapContaining.hasKey(URN));
+        assertThat(
+            registrar.getPTransformRunnerFactories(),
+            IsMapContaining.hasKey(RemoteGrpcPortRead.URN));
         return;
       }
     }

@@ -23,21 +23,21 @@ import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Iterables;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import javax.annotation.Nullable;
 import org.apache.beam.runners.core.ReadyCheckingSideInputReader;
 import org.apache.beam.runners.direct.DirectExecutionContext.DirectStepContext;
 import org.apache.beam.runners.direct.WatermarkManager.TimerUpdate;
 import org.apache.beam.runners.local.StructuralKey;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.runners.AppliedPTransform;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.DoFnSchemaInformation;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.View;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
@@ -51,6 +51,9 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableList;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 import org.hamcrest.Matchers;
 import org.joda.time.Instant;
 import org.junit.Before;
@@ -62,9 +65,7 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 
-/**
- * Tests for {@link ParDoEvaluator}.
- */
+/** Tests for {@link ParDoEvaluator}. */
 @RunWith(JUnit4.class)
 public class ParDoEvaluatorTest {
   @Mock private EvaluationContext evaluationContext;
@@ -73,8 +74,7 @@ public class ParDoEvaluatorTest {
   private List<TupleTag<?>> additionalOutputTags;
   private BundleFactory bundleFactory;
 
-  @Rule
-  public TestPipeline p = TestPipeline.create().enableAbandonedNodeEnforcement(false);
+  @Rule public TestPipeline p = TestPipeline.create().enableAbandonedNodeEnforcement(false);
 
   @Before
   public void setup() {
@@ -98,8 +98,7 @@ public class ParDoEvaluatorTest {
     UncommittedBundle<Integer> outputBundle = bundleFactory.createBundle(output);
     when(evaluationContext.createBundle(output)).thenReturn(outputBundle);
 
-    ParDoEvaluator<Integer> evaluator =
-        createEvaluator(singletonView, fn, inputPc, output);
+    ParDoEvaluator<Integer> evaluator = createEvaluator(singletonView, fn, inputPc, output);
 
     IntervalWindow nonGlobalWindow = new IntervalWindow(new Instant(0), new Instant(10_000L));
     WindowedValue<Integer> first = WindowedValue.valueInGlobalWindow(3);
@@ -121,11 +120,11 @@ public class ParDoEvaluatorTest {
         result.getUnprocessedElements(),
         Matchers.<WindowedValue<?>>containsInAnyOrder(
             second, WindowedValue.of(1, new Instant(2468L), nonGlobalWindow, PaneInfo.NO_FIRING)));
-    assertThat(result.getOutputBundles(), Matchers.<UncommittedBundle<?>>contains(outputBundle));
+    assertThat(result.getOutputBundles(), Matchers.contains(outputBundle));
     assertThat(fn.processed, containsInAnyOrder(1, 3));
     assertThat(
         Iterables.getOnlyElement(result.getOutputBundles()).commit(Instant.now()).getElements(),
-        Matchers.<WindowedValue<?>>containsInAnyOrder(
+        containsInAnyOrder(
             first.withValue(8),
             WindowedValue.timestampedValueInGlobalWindow(6, new Instant(2468L))));
   }
@@ -135,20 +134,14 @@ public class ParDoEvaluatorTest {
       RecorderFn fn,
       PCollection<Integer> input,
       PCollection<Integer> output) {
-    when(
-            evaluationContext.createSideInputReader(
-                ImmutableList.<PCollectionView<?>>of(singletonView)))
+    when(evaluationContext.createSideInputReader(ImmutableList.of(singletonView)))
         .thenReturn(new ReadyInGlobalWindowReader());
     DirectExecutionContext executionContext = mock(DirectExecutionContext.class);
     DirectStepContext stepContext = mock(DirectStepContext.class);
-    when(
-            executionContext.getStepContext(
-                Mockito.any(String.class)))
-        .thenReturn(stepContext);
+    when(executionContext.getStepContext(Mockito.any(String.class))).thenReturn(stepContext);
     when(stepContext.getTimerUpdate()).thenReturn(TimerUpdate.empty());
-    when(
-            evaluationContext.getExecutionContext(
-                Mockito.any(AppliedPTransform.class), Mockito.any(StructuralKey.class)))
+    when(evaluationContext.getExecutionContext(
+            Mockito.any(AppliedPTransform.class), Mockito.any(StructuralKey.class)))
         .thenReturn(executionContext);
 
     DirectGraphs.performDirectOverrides(p);
@@ -157,16 +150,20 @@ public class ParDoEvaluatorTest {
         (AppliedPTransform<PCollection<Integer>, ?, ?>) DirectGraphs.getProducer(output);
     return ParDoEvaluator.create(
         evaluationContext,
+        PipelineOptionsFactory.create(),
         stepContext,
         transform,
+        input.getCoder(),
         input.getWindowingStrategy(),
         fn,
         null /* key */,
-        ImmutableList.<PCollectionView<?>>of(singletonView),
+        ImmutableList.of(singletonView),
         mainOutputTag,
         additionalOutputTags,
-        ImmutableMap.<TupleTag<?>, PCollection<?>>of(mainOutputTag, output),
-        ParDoEvaluator.<Integer, Integer>defaultRunnerFactory());
+        ImmutableMap.of(mainOutputTag, output),
+        DoFnSchemaInformation.create(),
+        Collections.emptyMap(),
+        ParDoEvaluator.defaultRunnerFactory());
   }
 
   private static class RecorderFn extends DoFn<Integer, Integer> {

@@ -15,18 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.runners.gearpump.translators.io;
 
 import java.io.IOException;
-
 import org.apache.beam.sdk.io.BoundedSource;
 import org.apache.beam.sdk.io.Source;
 import org.apache.beam.sdk.options.PipelineOptions;
 
-/**
- * wrapper over BoundedSource for Gearpump DataSource API.
- */
+/** wrapper over BoundedSource for Gearpump DataSource API. */
 public class BoundedSourceWrapper<T> extends GearpumpSource<T> {
 
   private static final long serialVersionUID = 8199570485738786123L;
@@ -36,7 +32,6 @@ public class BoundedSourceWrapper<T> extends GearpumpSource<T> {
     super(options);
     this.source = source;
   }
-
 
   @Override
   protected Source.Reader<T> createReader(PipelineOptions options) throws IOException {

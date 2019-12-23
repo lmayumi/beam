@@ -20,18 +20,23 @@
 For internal use only; no backwards-compatibility guarantees.
 """
 
+from __future__ import absolute_import
+
 import logging
+from builtins import object
 
 from apache_beam import pvalue
 from apache_beam.io import iobase
 from apache_beam.transforms import ptransform
 from apache_beam.transforms.display import HasDisplayData
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def _dict_printable_fields(dict_object, skip_fields):
   """Returns a list of strings for the interesting fields of a dict."""
   return ['%s=%r' % (name, value)
-          for name, value in dict_object.iteritems()
+          for name, value in dict_object.items()
           # want to output value 0 but not None nor []
           if (value or value == 0)
           and name not in skip_fields]
@@ -93,7 +98,6 @@ class NativeSourceReader(object):
       A SourceReaderProgress object that gives the current progress of the
       reader.
     """
-    return
 
   def request_dynamic_split(self, dynamic_split_request):
     """Attempts to split the input in two parts.
@@ -133,11 +137,10 @@ class NativeSourceReader(object):
       or a 'DynamicSplitResult' describing how the input was split into a
       primary and residual part.
     """
-    logging.debug(
+    _LOGGER.debug(
         'SourceReader %r does not support dynamic splitting. Ignoring dynamic '
         'split request: %r',
         self, dynamic_split_request)
-    return
 
 
 class ReaderProgress(object):

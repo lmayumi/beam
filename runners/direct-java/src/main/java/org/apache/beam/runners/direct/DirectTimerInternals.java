@@ -17,6 +17,7 @@
  */
 package org.apache.beam.runners.direct;
 
+import java.util.stream.StreamSupport;
 import javax.annotation.Nullable;
 import org.apache.beam.runners.core.StateNamespace;
 import org.apache.beam.runners.core.TimerInternals;
@@ -26,9 +27,7 @@ import org.apache.beam.runners.direct.WatermarkManager.TransformWatermarks;
 import org.apache.beam.sdk.state.TimeDomain;
 import org.joda.time.Instant;
 
-/**
- * An implementation of {@link TimerInternals} where all relevant data exists in memory.
- */
+/** An implementation of {@link TimerInternals} where all relevant data exists in memory. */
 class DirectTimerInternals implements TimerInternals {
   private final Clock processingTimeClock;
   private final TransformWatermarks watermarks;
@@ -47,14 +46,12 @@ class DirectTimerInternals implements TimerInternals {
   }
 
   @Override
-  public void setTimer(StateNamespace namespace, String timerId, Instant target,
-      TimeDomain timeDomain) {
+  public void setTimer(
+      StateNamespace namespace, String timerId, Instant target, TimeDomain timeDomain) {
     timerUpdateBuilder.setTimer(TimerData.of(timerId, namespace, target, timeDomain));
   }
 
-  /**
-   * @deprecated use {@link #setTimer(StateNamespace, String, Instant, TimeDomain)}.
-   */
+  /** @deprecated use {@link #setTimer(StateNamespace, String, Instant, TimeDomain)}. */
   @Deprecated
   @Override
   public void setTimer(TimerData timerData) {
@@ -66,18 +63,14 @@ class DirectTimerInternals implements TimerInternals {
     throw new UnsupportedOperationException("Canceling of timer by ID is not yet supported.");
   }
 
-  /**
-   * @deprecated use {@link #deleteTimer(StateNamespace, String, TimeDomain)}.
-   */
+  /** @deprecated use {@link #deleteTimer(StateNamespace, String, TimeDomain)}. */
   @Deprecated
   @Override
   public void deleteTimer(StateNamespace namespace, String timerId) {
     throw new UnsupportedOperationException("Canceling of timer by ID is not yet supported.");
   }
 
-  /**
-   * @deprecated use {@link #deleteTimer(StateNamespace, String, TimeDomain)}.
-   */
+  /** @deprecated use {@link #deleteTimer(StateNamespace, String, TimeDomain)}. */
   @Deprecated
   @Override
   public void deleteTimer(TimerData timerKey) {
@@ -86,6 +79,12 @@ class DirectTimerInternals implements TimerInternals {
 
   public TimerUpdate getTimerUpdate() {
     return timerUpdateBuilder.build();
+  }
+
+  public boolean containsUpdateForTimeBefore(Instant time) {
+    TimerUpdate update = timerUpdateBuilder.build();
+    return hasTimeBefore(update.getSetTimers(), time)
+        || hasTimeBefore(update.getDeletedTimers(), time);
   }
 
   @Override
@@ -108,5 +107,10 @@ class DirectTimerInternals implements TimerInternals {
   @Nullable
   public Instant currentOutputWatermarkTime() {
     return watermarks.getOutputWatermark();
+  }
+
+  private boolean hasTimeBefore(Iterable<? extends TimerData> timers, Instant time) {
+    return StreamSupport.stream(timers.spliterator(), false)
+        .anyMatch(td -> td.getTimestamp().isBefore(time));
   }
 }

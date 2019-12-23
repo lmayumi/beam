@@ -23,7 +23,6 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.collection.IsIterableContainingInOrder.contains;
 import static org.junit.Assert.assertEquals;
 
-import com.google.common.collect.Lists;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -41,6 +40,7 @@ import org.apache.beam.sdk.transforms.ApproximateQuantiles.ApproximateQuantilesC
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Lists;
 import org.hamcrest.CoreMatchers;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
@@ -49,47 +49,40 @@ import org.hamcrest.TypeSafeDiagnosingMatcher;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-import org.junit.experimental.runners.Enclosed;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 import org.junit.runners.Parameterized;
 
-/**
- * Tests for {@link ApproximateQuantiles}.
- */
-@RunWith(Enclosed.class)
+/** Tests for {@link ApproximateQuantiles}. */
 public class ApproximateQuantilesTest {
 
   /** Tests for the overall combiner behavior. */
   @RunWith(JUnit4.class)
   public static class CombinerTests {
-    static final List<KV<String, Integer>> TABLE = Arrays.asList(
-        KV.of("a", 1),
-        KV.of("a", 2),
-        KV.of("a", 3),
-        KV.of("b", 1),
-        KV.of("b", 10),
-        KV.of("b", 10),
-        KV.of("b", 100)
-    );
+    static final List<KV<String, Integer>> TABLE =
+        Arrays.asList(
+            KV.of("a", 1),
+            KV.of("a", 2),
+            KV.of("a", 3),
+            KV.of("b", 1),
+            KV.of("b", 10),
+            KV.of("b", 10),
+            KV.of("b", 100));
 
-    @Rule
-    public TestPipeline p = TestPipeline.create();
+    @Rule public TestPipeline p = TestPipeline.create();
 
     public PCollection<KV<String, Integer>> createInputTable(Pipeline p) {
-      return p.apply(Create.of(TABLE).withCoder(
-          KvCoder.of(StringUtf8Coder.of(), BigEndianIntegerCoder.of())));
+      return p.apply(
+          Create.of(TABLE).withCoder(KvCoder.of(StringUtf8Coder.of(), BigEndianIntegerCoder.of())));
     }
 
     @Test
     @Category(NeedsRunner.class)
     public void testQuantilesGlobally() {
       PCollection<Integer> input = intRangeCollection(p, 101);
-      PCollection<List<Integer>> quantiles =
-          input.apply(ApproximateQuantiles.<Integer>globally(5));
+      PCollection<List<Integer>> quantiles = input.apply(ApproximateQuantiles.globally(5));
 
-      PAssert.that(quantiles)
-          .containsInAnyOrder(Arrays.asList(0, 25, 50, 75, 100));
+      PAssert.that(quantiles).containsInAnyOrder(Arrays.asList(0, 25, 50, 75, 100));
       p.run();
     }
 
@@ -98,11 +91,9 @@ public class ApproximateQuantilesTest {
     public void testQuantilesGobally_comparable() {
       PCollection<Integer> input = intRangeCollection(p, 101);
       PCollection<List<Integer>> quantiles =
-          input.apply(
-              ApproximateQuantiles.globally(5, new DescendingIntComparator()));
+          input.apply(ApproximateQuantiles.globally(5, new DescendingIntComparator()));
 
-      PAssert.that(quantiles)
-          .containsInAnyOrder(Arrays.asList(100, 75, 50, 25, 0));
+      PAssert.that(quantiles).containsInAnyOrder(Arrays.asList(100, 75, 50, 25, 0));
       p.run();
     }
 
@@ -110,36 +101,30 @@ public class ApproximateQuantilesTest {
     @Category(NeedsRunner.class)
     public void testQuantilesPerKey() {
       PCollection<KV<String, Integer>> input = createInputTable(p);
-      PCollection<KV<String, List<Integer>>> quantiles = input.apply(
-          ApproximateQuantiles.<String, Integer>perKey(2));
+      PCollection<KV<String, List<Integer>>> quantiles =
+          input.apply(ApproximateQuantiles.perKey(2));
 
       PAssert.that(quantiles)
-          .containsInAnyOrder(
-              KV.of("a", Arrays.asList(1, 3)),
-              KV.of("b", Arrays.asList(1, 100)));
+          .containsInAnyOrder(KV.of("a", Arrays.asList(1, 3)), KV.of("b", Arrays.asList(1, 100)));
       p.run();
-
     }
 
     @Test
     @Category(NeedsRunner.class)
     public void testQuantilesPerKey_reversed() {
       PCollection<KV<String, Integer>> input = createInputTable(p);
-      PCollection<KV<String, List<Integer>>> quantiles = input.apply(
-          ApproximateQuantiles.<String, Integer, DescendingIntComparator>perKey(
-              2, new DescendingIntComparator()));
+      PCollection<KV<String, List<Integer>>> quantiles =
+          input.apply(ApproximateQuantiles.perKey(2, new DescendingIntComparator()));
 
       PAssert.that(quantiles)
-          .containsInAnyOrder(
-              KV.of("a", Arrays.asList(3, 1)),
-              KV.of("b", Arrays.asList(100, 1)));
+          .containsInAnyOrder(KV.of("a", Arrays.asList(3, 1)), KV.of("b", Arrays.asList(100, 1)));
       p.run();
     }
 
     @Test
     public void testSingleton() {
       testCombineFn(
-          ApproximateQuantilesCombineFn.<Integer>create(5),
+          ApproximateQuantilesCombineFn.create(5),
           Arrays.asList(389),
           Arrays.asList(389, 389, 389, 389, 389));
     }
@@ -147,7 +132,7 @@ public class ApproximateQuantilesTest {
     @Test
     public void testSimpleQuantiles() {
       testCombineFn(
-          ApproximateQuantilesCombineFn.<Integer>create(5),
+          ApproximateQuantilesCombineFn.create(5),
           intRange(101),
           Arrays.asList(0, 25, 50, 75, 100));
     }
@@ -155,7 +140,7 @@ public class ApproximateQuantilesTest {
     @Test
     public void testUnevenQuantiles() {
       testCombineFn(
-          ApproximateQuantilesCombineFn.<Integer>create(37),
+          ApproximateQuantilesCombineFn.create(37),
           intRange(5000),
           quantileMatcher(5000, 37, 20 /* tolerance */));
     }
@@ -163,7 +148,7 @@ public class ApproximateQuantilesTest {
     @Test
     public void testLargerQuantiles() {
       testCombineFn(
-          ApproximateQuantilesCombineFn.<Integer>create(50),
+          ApproximateQuantilesCombineFn.create(50),
           intRange(10001),
           quantileMatcher(10001, 50, 20 /* tolerance */));
     }
@@ -184,9 +169,7 @@ public class ApproximateQuantilesTest {
         all.addAll(intRange(size));
       }
       testCombineFn(
-          ApproximateQuantilesCombineFn.<Integer>create(5),
-          all,
-          Arrays.asList(0, 25, 50, 75, 100));
+          ApproximateQuantilesCombineFn.create(5), all, Arrays.asList(0, 25, 50, 75, 100));
     }
 
     @Test
@@ -199,10 +182,7 @@ public class ApproximateQuantilesTest {
       for (int i = 300; i < 1000; i++) {
         all.add(3);
       }
-      testCombineFn(
-          ApproximateQuantilesCombineFn.<Integer>create(5),
-          all,
-          Arrays.asList(1, 2, 3, 3, 3));
+      testCombineFn(ApproximateQuantilesCombineFn.create(5), all, Arrays.asList(1, 2, 3, 3, 3));
     }
 
     @Test
@@ -211,10 +191,7 @@ public class ApproximateQuantilesTest {
       for (int i = 1; i < 1000; i++) {
         all.add((int) Math.log(i));
       }
-      testCombineFn(
-          ApproximateQuantilesCombineFn.<Integer>create(5),
-          all,
-          Arrays.asList(0, 5, 6, 6, 6));
+      testCombineFn(ApproximateQuantilesCombineFn.create(5), all, Arrays.asList(0, 5, 6, 6, 6));
     }
 
     @Test
@@ -223,20 +200,14 @@ public class ApproximateQuantilesTest {
       for (int i = 1; i < 1000; i++) {
         all.add(1000 / i);
       }
-      testCombineFn(
-          ApproximateQuantilesCombineFn.<Integer>create(5),
-          all,
-          Arrays.asList(1, 1, 2, 4, 1000));
+      testCombineFn(ApproximateQuantilesCombineFn.create(5), all, Arrays.asList(1, 1, 2, 4, 1000));
     }
 
     @Test
     public void testAlternateComparator() {
-      List<String> inputs = Arrays.asList(
-          "aa", "aaa", "aaaa", "b", "ccccc", "dddd", "zz");
+      List<String> inputs = Arrays.asList("aa", "aaa", "aaaa", "b", "ccccc", "dddd", "zz");
       testCombineFn(
-          ApproximateQuantilesCombineFn.<String>create(3),
-          inputs,
-          Arrays.asList("aa", "b", "zz"));
+          ApproximateQuantilesCombineFn.create(3), inputs, Arrays.asList("aa", "b", "zz"));
       testCombineFn(
           ApproximateQuantilesCombineFn.create(3, new OrderByLength()),
           inputs,
@@ -245,7 +216,7 @@ public class ApproximateQuantilesTest {
 
     @Test
     public void testDisplayData() {
-      Top.Natural<Integer> comparer = new Top.Natural<Integer>();
+      Top.Natural<Integer> comparer = new Top.Natural<>();
       PTransform<?, ?> approxQuanitiles = ApproximateQuantiles.globally(20, comparer);
       DisplayData displayData = DisplayData.from(approxQuanitiles);
 
@@ -259,15 +230,13 @@ public class ApproximateQuantilesTest {
       quantiles.add(CoreMatchers.is(0));
       for (int k = 1; k < numQuantiles - 1; k++) {
         int expected = (int) (((double) (size - 1)) * k / (numQuantiles - 1));
-        quantiles.add(new Between<>(
-            expected - absoluteError, expected + absoluteError));
+        quantiles.add(new Between<>(expected - absoluteError, expected + absoluteError));
       }
       quantiles.add(CoreMatchers.is(size - 1));
       return contains(quantiles);
     }
 
-    private static class Between<T extends Comparable<T>>
-        extends TypeSafeDiagnosingMatcher<T> {
+    private static class Between<T extends Comparable<T>> extends TypeSafeDiagnosingMatcher<T> {
       private final T min;
       private final T max;
 
@@ -287,8 +256,7 @@ public class ApproximateQuantilesTest {
       }
     }
 
-    private static class DescendingIntComparator implements
-        SerializableComparator<Integer> {
+    private static class DescendingIntComparator implements SerializableComparator<Integer> {
       @Override
       public int compare(Integer o1, Integer o2) {
         return o2.compareTo(o1);
@@ -305,7 +273,6 @@ public class ApproximateQuantilesTest {
         }
       }
     }
-
 
     private PCollection<Integer> intRangeCollection(Pipeline p, int size) {
       return p.apply("CreateIntsUpTo(" + size + ")", Create.of(intRange(size)));
@@ -336,36 +303,40 @@ public class ApproximateQuantilesTest {
      *
      * @see ApproximateQuantilesCombineFn for paper reference.
      */
-    private static final double[] epsilons = new double[]{0.1, 0.05, 0.01, 0.005, 0.001};
-    private static final int[] maxElementExponents = new int[]{5, 6, 7, 8, 9};
+    private static final double[] epsilons = new double[] {0.1, 0.05, 0.01, 0.005, 0.001};
 
-    private static final int[][] expectedNumBuffersValues = new int[][]{
-        {11, 14, 17, 21, 24},
-        {11, 14, 17, 20, 23},
-        {9, 11, 14, 17, 21},
-        {8, 11, 14, 17, 20},
-        {6, 9, 11, 14, 17},
-    };
+    private static final int[] maxElementExponents = new int[] {5, 6, 7, 8, 9};
 
-    private static final int[][] expectedBufferSizeValues = new int[][]{
-        {98, 123, 153, 96, 120},
-        {98, 123, 153, 191, 239},
-        {391, 977, 1221, 1526, 954},
-        {782, 977, 1221, 1526, 1908},
-        {3125, 3907, 9766, 12208, 15259},
-    };
+    private static final int[][] expectedNumBuffersValues =
+        new int[][] {
+          {11, 14, 17, 21, 24},
+          {11, 14, 17, 20, 23},
+          {9, 11, 14, 17, 21},
+          {8, 11, 14, 17, 20},
+          {6, 9, 11, 14, 17},
+        };
+
+    private static final int[][] expectedBufferSizeValues =
+        new int[][] {
+          {98, 123, 153, 96, 120},
+          {98, 123, 153, 191, 239},
+          {391, 977, 1221, 1526, 954},
+          {782, 977, 1221, 1526, 1908},
+          {3125, 3907, 9766, 12208, 15259},
+        };
 
     @Parameterized.Parameters(name = "{index}: epsilon = {0}, maxInputSize = {1}")
     public static Collection<Object[]> data() {
       Collection<Object[]> testData = Lists.newArrayList();
       for (int i = 0; i < epsilons.length; i++) {
         for (int j = 0; j < maxElementExponents.length; j++) {
-          testData.add(new Object[]{
-              epsilons[i],
-              (long) Math.pow(10, maxElementExponents[j]),
-              expectedNumBuffersValues[i][j],
-              expectedBufferSizeValues[i][j]
-          });
+          testData.add(
+              new Object[] {
+                epsilons[i],
+                (long) Math.pow(10, maxElementExponents[j]),
+                expectedNumBuffersValues[i][j],
+                expectedBufferSizeValues[i][j]
+              });
         }
       }
 
@@ -379,22 +350,18 @@ public class ApproximateQuantilesTest {
       this.expectedNumBuffers = expectedNumBuffers;
       this.expectedBufferSize = expectedBufferSize;
 
-      this.combineFn = ApproximateQuantilesCombineFn.create(
-          10, new Top.Natural<Long>(), maxInputSize, epsilon);
+      this.combineFn =
+          ApproximateQuantilesCombineFn.create(10, new Top.Natural<Long>(), maxInputSize, epsilon);
     }
 
-    /**
-     * Verify the buffers are efficiently calculated according to the reference table values.
-     */
+    /** Verify the buffers are efficiently calculated according to the reference table values. */
     @Test
     public void testEfficiency() {
       assertEquals("Number of buffers", expectedNumBuffers, combineFn.getNumBuffers());
       assertEquals("Buffer size", expectedBufferSize, combineFn.getBufferSize());
     }
 
-    /**
-     * Verify that buffers are correct according to the two constraint equations.
-     */
+    /** Verify that buffers are correct according to the two constraint equations. */
     @Test
     public void testCorrectness() {
       int b = combineFn.getNumBuffers();
@@ -406,9 +373,7 @@ public class ApproximateQuantilesTest {
           (b - 2) * (1 << (b - 2)) + 0.5,
           Matchers.lessThanOrEqualTo(this.epsilon * n));
       assertThat(
-          "k2^(b-1) >= N",
-          Math.pow(k * 2, b - 1),
-          Matchers.greaterThanOrEqualTo((double) n));
+          "k2^(b-1) >= N", Math.pow(k * 2, b - 1), Matchers.greaterThanOrEqualTo((double) n));
     }
   }
 }

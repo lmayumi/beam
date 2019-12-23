@@ -19,58 +19,62 @@
 
 from __future__ import absolute_import
 
+import importlib
 import logging
 import os
 import shelve
 import shutil
 import tempfile
+from builtins import object
+from typing import TYPE_CHECKING
+from typing import Optional
+
+if TYPE_CHECKING:
+  from apache_beam import pvalue
+  from apache_beam import PTransform
+  from apache_beam.options.pipeline_options import PipelineOptions
+  from apache_beam.pipeline import AppliedPTransform
+  from apache_beam.pipeline import Pipeline
+  from apache_beam.pipeline import PipelineVisitor
 
 __all__ = ['PipelineRunner', 'PipelineState', 'PipelineResult']
 
 
-def _get_runner_map(runner_names, module_path):
-  """Create a map of runner name in lower case to full import path to the
-  runner class.
-  """
-  return {runner_name.lower(): module_path + runner_name
-          for runner_name in runner_names}
-
-
-_DIRECT_RUNNER_PATH = 'apache_beam.runners.direct.direct_runner.'
-_DATAFLOW_RUNNER_PATH = (
-    'apache_beam.runners.dataflow.dataflow_runner.')
-_TEST_RUNNER_PATH = 'apache_beam.runners.test.'
-_PYTHON_RPC_DIRECT_RUNNER = (
-    'apache_beam.runners.experimental.python_rpc_direct.'
-    'python_rpc_direct_runner.')
-
-_KNOWN_PYTHON_RPC_DIRECT_RUNNER = ('PythonRPCDirectRunner',)
-_KNOWN_DIRECT_RUNNERS = ('DirectRunner', 'EagerRunner')
-_KNOWN_DATAFLOW_RUNNERS = ('DataflowRunner',)
-_KNOWN_TEST_RUNNERS = ('TestDataflowRunner',)
-
-_RUNNER_MAP = {}
-_RUNNER_MAP.update(_get_runner_map(_KNOWN_DIRECT_RUNNERS,
-                                   _DIRECT_RUNNER_PATH))
-_RUNNER_MAP.update(_get_runner_map(_KNOWN_DATAFLOW_RUNNERS,
-                                   _DATAFLOW_RUNNER_PATH))
-_RUNNER_MAP.update(_get_runner_map(_KNOWN_PYTHON_RPC_DIRECT_RUNNER,
-                                   _PYTHON_RPC_DIRECT_RUNNER))
-_RUNNER_MAP.update(_get_runner_map(_KNOWN_TEST_RUNNERS,
-                                   _TEST_RUNNER_PATH))
-
 _ALL_KNOWN_RUNNERS = (
-    _KNOWN_DIRECT_RUNNERS + _KNOWN_DATAFLOW_RUNNERS + _KNOWN_TEST_RUNNERS)
+    'apache_beam.runners.dataflow.dataflow_runner.DataflowRunner',
+    'apache_beam.runners.direct.direct_runner.BundleBasedDirectRunner',
+    'apache_beam.runners.direct.direct_runner.DirectRunner',
+    'apache_beam.runners.direct.direct_runner.SwitchingDirectRunner',
+    'apache_beam.runners.interactive.interactive_runner.InteractiveRunner',
+    'apache_beam.runners.portability.flink_runner.FlinkRunner',
+    'apache_beam.runners.portability.portable_runner.PortableRunner',
+    'apache_beam.runners.portability.spark_runner.SparkRunner',
+    'apache_beam.runners.test.TestDirectRunner',
+    'apache_beam.runners.test.TestDataflowRunner',
+)
+
+_KNOWN_RUNNER_NAMES = [path.split('.')[-1] for path in _ALL_KNOWN_RUNNERS]
+
+_RUNNER_MAP = {path.split('.')[-1].lower(): path
+               for path in _ALL_KNOWN_RUNNERS}
+
+# Allow this alias, but don't make public.
+_RUNNER_MAP['pythonrpcdirectrunner'] = (
+    'apache_beam.runners.experimental'
+    '.python_rpc_direct.python_rpc_direct_runner.PythonRPCDirectRunner')
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def create_runner(runner_name):
+  # type: (str) -> PipelineRunner
   """For internal use only; no backwards-compatibility guarantees.
 
   Creates a runner instance from a runner class name.
 
   Args:
-    runner_name: Name of the pipeline runner. Possible values are:
-      DirectRunner, DataflowRunner and TestDataflowRunner.
+    runner_name: Name of the pipeline runner. Possible values are listed in
+      _RUNNER_MAP above.
 
   Returns:
     A runner object.
@@ -89,19 +93,23 @@ def create_runner(runner_name):
   if '.' in runner_name:
     module, runner = runner_name.rsplit('.', 1)
     try:
-      return getattr(__import__(module, {}, {}, [runner], -1), runner)()
+      return getattr(importlib.import_module(module), runner)()
     except ImportError:
-      if runner_name in _KNOWN_DATAFLOW_RUNNERS:
+      if 'dataflow' in runner_name.lower():
         raise ImportError(
             'Google Cloud Dataflow runner not available, '
             'please install apache_beam[gcp]')
+      elif 'interactive' in runner_name.lower():
+        raise ImportError(
+            'Interactive runner not available, '
+            'please install apache_beam[interactive]')
       else:
         raise
   else:
     raise ValueError(
         'Unexpected pipeline runner: %s. Valid values are %s '
         'or the fully qualified name of a PipelineRunner subclass.' % (
-            runner_name, ', '.join(_ALL_KNOWN_RUNNERS)))
+            runner_name, ', '.join(_KNOWN_RUNNER_NAMES)))
 
 
 class PipelineRunner(object):
@@ -116,28 +124,58 @@ class PipelineRunner(object):
   materialized values in order to reduce footprint.
   """
 
-  def run(self, pipeline):
-    """Execute the entire pipeline or the sub-DAG reachable from a node."""
+  def run(self,
+          transform,  # type: PTransform
+          options=None  # type: Optional[PipelineOptions]
+         ):
+    # type: (...) -> PipelineResult
+    """Run the given transform or callable with this runner.
 
+    Blocks until the pipeline is complete.  See also `PipelineRunner.run_async`.
+    """
+    result = self.run_async(transform, options)
+    result.wait_until_finish()
+    return result
+
+  def run_async(self,
+                transform,  # type: PTransform
+                options=None  # type: Optional[PipelineOptions]
+               ):
+    # type: (...) -> PipelineResult
+    """Run the given transform or callable with this runner.
+
+    May return immediately, executing the pipeline in the background.
+    The returned result object can be queried for progress, and
+    `wait_until_finish` may be called to block until completion.
+    """
     # Imported here to avoid circular dependencies.
     # pylint: disable=wrong-import-order, wrong-import-position
-    from apache_beam.pipeline import PipelineVisitor
+    from apache_beam import PTransform
+    from apache_beam.pvalue import PBegin
+    from apache_beam.pipeline import Pipeline
+    p = Pipeline(runner=self, options=options)
+    if isinstance(transform, PTransform):
+      p | transform
+    else:
+      transform(PBegin(p))
+    return p.run()
 
-    class RunVisitor(PipelineVisitor):
+  def run_pipeline(self,
+                   pipeline,  # type: Pipeline
+                   options  # type: PipelineOptions
+                  ):
+    # type: (...) -> PipelineResult
+    """Execute the entire pipeline or the sub-DAG reachable from a node.
 
-      def __init__(self, runner):
-        self.runner = runner
+    Runners should override this method.
+    """
+    raise NotImplementedError
 
-      def visit_transform(self, transform_node):
-        try:
-          self.runner.run_transform(transform_node)
-        except:
-          logging.error('Error while visiting %s', transform_node.full_label)
-          raise
-
-    pipeline.visit(RunVisitor(self))
-
-  def apply(self, transform, input):
+  def apply(self,
+            transform,  # type: PTransform
+            input,  # type: pvalue.PCollection
+            options  # type: PipelineOptions
+           ):
     """Runner callback for a pipeline.apply call.
 
     Args:
@@ -152,15 +190,42 @@ class PipelineRunner(object):
     for cls in transform.__class__.mro():
       m = getattr(self, 'apply_%s' % cls.__name__, None)
       if m:
-        return m(transform, input)
+        return m(transform, input, options)
     raise NotImplementedError(
         'Execution of [%s] not implemented in runner %s.' % (transform, self))
 
-  def apply_PTransform(self, transform, input):
+  def visit_transforms(self,
+                       pipeline,  # type: Pipeline
+                       options  # type: PipelineOptions
+                      ):
+    # type: (...) -> None
+    # Imported here to avoid circular dependencies.
+    # pylint: disable=wrong-import-order, wrong-import-position
+    from apache_beam.pipeline import PipelineVisitor
+
+    class RunVisitor(PipelineVisitor):
+
+      def __init__(self, runner):
+        # type: (PipelineRunner) -> None
+        self.runner = runner
+
+      def visit_transform(self, transform_node):
+        try:
+          self.runner.run_transform(transform_node, options)
+        except:
+          _LOGGER.error('Error while visiting %s', transform_node.full_label)
+          raise
+
+    pipeline.visit(RunVisitor(self))
+
+  def apply_PTransform(self, transform, input, options):
     # The base case of apply is to call the transform's expand.
     return transform.expand(input)
 
-  def run_transform(self, transform_node):
+  def run_transform(self,
+                    transform_node,  # type: AppliedPTransform
+                    options  # type: PipelineOptions
+                   ):
     """Runner callback for a pipeline.run call.
 
     Args:
@@ -173,10 +238,14 @@ class PipelineRunner(object):
     for cls in transform_node.transform.__class__.mro():
       m = getattr(self, 'run_%s' % cls.__name__, None)
       if m:
-        return m(transform_node)
+        return m(transform_node, options)
     raise NotImplementedError(
         'Execution of [%s] not implemented in runner %s.' % (
             transform_node.transform, self))
+
+  def is_fnapi_compatible(self):
+    """Whether to enable the beam_fn_api experiment by default."""
+    return True
 
 
 class PValueCache(object):
@@ -245,21 +314,13 @@ class PValueCache(object):
     else:
       tag = tag_or_value
     self._cache[
-        self.to_cache_key(transform, tag)] = [value, transform.refcounts[tag]]
+        self.to_cache_key(transform, tag)] = value
 
-  def get_pvalue(self, pvalue, decref=True):
+  def get_pvalue(self, pvalue):
     """Gets the value associated with a PValue from the cache."""
     self._ensure_pvalue_has_real_producer(pvalue)
     try:
-      value_with_refcount = self._cache[self.key(pvalue)]
-      if decref:
-        value_with_refcount[1] -= 1
-        logging.debug('PValue computed by %s (tag %s): refcount: %d => %d',
-                      pvalue.real_producer.full_label, self.key(pvalue)[1],
-                      value_with_refcount[1] + 1, value_with_refcount[1])
-        if value_with_refcount[1] <= 0:
-          self.clear_pvalue(pvalue)
-      return value_with_refcount[0]
+      return self._cache[self.key(pvalue)]
     except KeyError:
       if (pvalue.tag is not None
           and self.to_cache_key(pvalue.real_producer, None) in self._cache):
@@ -269,8 +330,8 @@ class PValueCache(object):
       else:
         raise
 
-  def get_unwindowed_pvalue(self, pvalue, decref=True):
-    return [v.value for v in self.get_pvalue(pvalue, decref)]
+  def get_unwindowed_pvalue(self, pvalue):
+    return [v.value for v in self.get_pvalue(pvalue)]
 
   def clear_pvalue(self, pvalue):
     """Removes a PValue from the cache."""
@@ -282,6 +343,7 @@ class PValueCache(object):
     return self.to_cache_key(pobj.real_producer, pobj.tag)
 
 
+# FIXME: replace with PipelineState(str, enum.Enum)
 class PipelineState(object):
   """State of the Pipeline, as returned by :attr:`PipelineResult.state`.
 
@@ -289,7 +351,7 @@ class PipelineState(object):
   pipeline in. Currently, it represents the values of the dataflow
   API JobState enum.
   """
-  UNKNOWN = 'UNKNOWN'  # not specified
+  UNKNOWN = 'UNKNOWN'  # not specified by a runner, or unknown to a runner.
   STARTING = 'STARTING'  # not yet started
   STOPPED = 'STOPPED'  # paused or not yet started
   RUNNING = 'RUNNING'  # currently running
@@ -302,6 +364,13 @@ class PipelineState(object):
   PENDING = 'PENDING' # the job has been created but is not yet running.
   CANCELLING = 'CANCELLING' # job has been explicitly cancelled and is
                             # in the process of stopping
+  UNRECOGNIZED = 'UNRECOGNIZED' # the job state reported by a runner cannot be
+                                # interpreted by the SDK.
+
+  @classmethod
+  def is_terminal(cls, state):
+    return state in [cls.DONE, cls.FAILED, cls.CANCELLED,
+                     cls.UPDATED, cls.DRAINED]
 
 
 class PipelineResult(object):
@@ -361,6 +430,6 @@ class PipelineResult(object):
   # pylint: disable=unused-argument
   def aggregated_values(self, aggregator_or_name):
     """Return a dict of step names to values of the Aggregator."""
-    logging.warn('%s does not implement aggregated_values',
-                 self.__class__.__name__)
+    _LOGGER.warning('%s does not implement aggregated_values',
+                    self.__class__.__name__)
     return {}

@@ -17,12 +17,9 @@
  */
 package org.apache.beam.runners.gearpump.translators;
 
-import com.google.common.collect.Iterables;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-
 import org.apache.beam.runners.core.construction.ReplacementOutputs;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.CoderRegistry;
@@ -36,6 +33,7 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.PValue;
 import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 
 /** Gearpump streaming overrides for various view (side input) transforms. */
 class CreateStreamingGearpumpView<ElemT, ViewT>
@@ -50,23 +48,23 @@ class CreateStreamingGearpumpView<ElemT, ViewT>
   public PCollection<ElemT> expand(PCollection<ElemT> input) {
     input
         .apply(Combine.globally(new Concatenate<ElemT>()).withoutDefaults())
-        .apply(CreateGearpumpPCollectionView.<ElemT, ViewT>of(view));
+        .apply(CreateGearpumpPCollectionView.of(view));
     return input;
   }
 
   /**
    * Combiner that combines {@code T}s into a single {@code List<T>} containing all inputs.
    *
-   * <p>For internal use by {@link CreateStreamingGearpumpView}. This combiner requires that
-   * the input {@link PCollection} fits in memory. For a large {@link PCollection} this is
-   * expected to crash!
+   * <p>For internal use by {@link CreateStreamingGearpumpView}. This combiner requires that the
+   * input {@link PCollection} fits in memory. For a large {@link PCollection} this is expected to
+   * crash!
    *
    * @param <T> the type of elements to concatenate.
    */
   private static class Concatenate<T> extends Combine.CombineFn<T, List<T>, List<T>> {
     @Override
     public List<T> createAccumulator() {
-      return new ArrayList<T>();
+      return new ArrayList<>();
     }
 
     @Override
@@ -123,7 +121,7 @@ class CreateStreamingGearpumpView<ElemT, ViewT>
 
     @Override
     public PCollection<List<ElemT>> expand(PCollection<List<ElemT>> input) {
-      return PCollection.<List<ElemT>>createPrimitiveOutputInternal(
+      return PCollection.createPrimitiveOutputInternal(
           input.getPipeline(), input.getWindowingStrategy(), input.isBounded(), input.getCoder());
     }
 
@@ -144,7 +142,7 @@ class CreateStreamingGearpumpView<ElemT, ViewT>
             transform) {
       return PTransformReplacement.of(
           (PCollection<ElemT>) Iterables.getOnlyElement(transform.getInputs().values()),
-          new CreateStreamingGearpumpView<ElemT, ViewT>(transform.getTransform().getView()));
+          new CreateStreamingGearpumpView<>(transform.getTransform().getView()));
     }
 
     @Override

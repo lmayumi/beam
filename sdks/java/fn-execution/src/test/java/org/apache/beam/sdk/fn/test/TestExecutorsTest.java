@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.beam.sdk.fn.test;
 
 import static org.junit.Assert.assertEquals;
@@ -45,12 +44,7 @@ public class TestExecutorsTest {
             new Statement() {
               @Override
               public void evaluate() throws Throwable {
-                testService.submit(new Runnable() {
-                  @Override
-                  public void run() {
-                    taskRan.set(true);
-                  }
-                });
+                testService.submit(() -> taskRan.set(true)).get();
               }
             },
             null)
@@ -60,6 +54,10 @@ public class TestExecutorsTest {
   }
 
   @Test
+  // FutureReturnValueIgnored suppression is safe because testService is
+  // expected to *not* shutdown cleanly on the task it was given to execute.
+  // If we try to obtain the result of the future the test will timeout.
+  @SuppressWarnings("FutureReturnValueIgnored")
   public void testTaskBlocksForeverCausesFailure() throws Throwable {
     ExecutorService service = Executors.newSingleThreadExecutor();
     final TestExecutorService testService = TestExecutors.from(service);
@@ -71,12 +69,7 @@ public class TestExecutorsTest {
               new Statement() {
                 @Override
                 public void evaluate() throws Throwable {
-                  testService.submit(new Runnable() {
-                    @Override
-                    public void run() {
-                      taskToRun();
-                    }
-                  });
+                  testService.submit(this::taskToRun);
                 }
 
                 private void taskToRun() {
@@ -125,6 +118,10 @@ public class TestExecutorsTest {
   }
 
   @Test
+  // FutureReturnValueIgnored suppression is safe because testService is
+  // expected to *not* shutdown cleanly on the task it was given to execute.
+  // If we try to obtain the result of the future the test will timeout.
+  @SuppressWarnings("FutureReturnValueIgnored")
   public void testStatementFailurePropagatedWhenExecutorServiceFailingToTerminate()
       throws Throwable {
     ExecutorService service = Executors.newSingleThreadExecutor();
@@ -138,12 +135,7 @@ public class TestExecutorsTest {
               new Statement() {
                 @Override
                 public void evaluate() throws Throwable {
-                  testService.submit(new Runnable() {
-                    @Override
-                    public void run() {
-                      taskToRun();
-                    }
-                  });
+                  testService.submit(this::taskToRun);
                   throw exceptionToThrow;
                 }
 

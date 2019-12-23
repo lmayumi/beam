@@ -24,7 +24,6 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertThat;
 
-import com.google.common.collect.Iterables;
 import java.io.Serializable;
 import java.util.Collections;
 import java.util.HashSet;
@@ -61,6 +60,7 @@ import org.apache.beam.sdk.values.TaggedPValue;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
 import org.apache.beam.sdk.values.WindowingStrategy;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
 import org.hamcrest.Matchers;
 import org.junit.Before;
 import org.junit.Rule;
@@ -69,9 +69,7 @@ import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@link TransformHierarchy}.
- */
+/** Tests for {@link TransformHierarchy}. */
 @RunWith(JUnit4.class)
 public class TransformHierarchyTest implements Serializable {
   @Rule
@@ -230,23 +228,18 @@ public class TransformHierarchyTest implements Serializable {
 
     TaggedPValue taggedReplacement = TaggedPValue.ofExpandedValue(replacementOutput);
     Map<PValue, ReplacementOutput> replacementOutputs =
-        Collections.<PValue, ReplacementOutput>singletonMap(
+        Collections.singletonMap(
             replacementOutput,
-            ReplacementOutput.of(
-                TaggedPValue.ofExpandedValue(originalOutput),
-                taggedReplacement));
+            ReplacementOutput.of(TaggedPValue.ofExpandedValue(originalOutput), taggedReplacement));
     hierarchy.replaceOutputs(replacementOutputs);
 
     assertThat(replacement.getInputs(), equalTo(original.getInputs()));
     assertThat(replacement.getEnclosingNode(), equalTo(original.getEnclosingNode()));
     assertThat(replacement.getEnclosingNode(), equalTo(enclosing));
-    assertThat(
-        replacement.getTransform(), Matchers.<PTransform<?, ?>>equalTo(replacementTransform));
+    assertThat(replacement.getTransform(), equalTo(replacementTransform));
     // THe tags of the replacement transform are matched to the appropriate PValues of the original
-    assertThat(
-        replacement.getOutputs().keySet(),
-        Matchers.<TupleTag<?>>contains(taggedReplacement.getTag()));
-    assertThat(replacement.getOutputs().values(), Matchers.<PValue>contains(originalOutput));
+    assertThat(replacement.getOutputs().keySet(), Matchers.contains(taggedReplacement.getTag()));
+    assertThat(replacement.getOutputs().values(), Matchers.contains(originalOutput));
     hierarchy.popNode();
   }
 
@@ -301,23 +294,22 @@ public class TransformHierarchyTest implements Serializable {
     hierarchy.popNode();
     hierarchy.setOutput(replacementOutput.get(longs));
 
-    Entry<TupleTag<?>, PValue>
-        replacementLongs = Iterables.getOnlyElement(replacementOutput.expand().entrySet());
+    Entry<TupleTag<?>, PValue> replacementLongs =
+        Iterables.getOnlyElement(replacementOutput.expand().entrySet());
     hierarchy.replaceOutputs(
-        Collections.<PValue, ReplacementOutput>singletonMap(
+        Collections.singletonMap(
             replacementOutput.get(longs),
             ReplacementOutput.of(
                 TaggedPValue.ofExpandedValue(output),
                 TaggedPValue.of(replacementLongs.getKey(), replacementLongs.getValue()))));
 
     assertThat(
-        replacementParNode.getOutputs().keySet(),
-        Matchers.<TupleTag<?>>contains(replacementLongs.getKey()));
-    assertThat(replacementParNode.getOutputs().values(), Matchers.<PValue>contains(output));
+        replacementParNode.getOutputs().keySet(), Matchers.contains(replacementLongs.getKey()));
+    assertThat(replacementParNode.getOutputs().values(), Matchers.contains(output));
     assertThat(
         compositeNode.getOutputs().keySet(),
         equalTo(replacementOutput.get(longs).expand().keySet()));
-    assertThat(compositeNode.getOutputs().values(), Matchers.<PValue>contains(output));
+    assertThat(compositeNode.getOutputs().values(), Matchers.contains(output));
     hierarchy.popNode();
   }
 
@@ -350,7 +342,7 @@ public class TransformHierarchyTest implements Serializable {
     hierarchy.finishSpecifyingInput();
     assertThat(hierarchy.getCurrent(), equalTo(compositeNode));
     assertThat(compositeNode.getInputs().entrySet(), Matchers.empty());
-    assertThat(compositeNode.getTransform(), Matchers.<PTransform<?, ?>>equalTo(create));
+    assertThat(compositeNode.getTransform(), equalTo(create));
     // Not yet set
     assertThat(compositeNode.getOutputs().entrySet(), Matchers.emptyIterable());
     assertThat(compositeNode.getEnclosingNode().isRootNode(), is(true));
@@ -360,14 +352,14 @@ public class TransformHierarchyTest implements Serializable {
     hierarchy.finishSpecifyingInput();
     hierarchy.setOutput(created);
     hierarchy.popNode();
-    assertThat(primitiveNode.getOutputs().values(), Matchers.<PValue>containsInAnyOrder(created));
+    assertThat(primitiveNode.getOutputs().values(), containsInAnyOrder(created));
     assertThat(primitiveNode.getInputs().entrySet(), Matchers.emptyIterable());
-    assertThat(primitiveNode.getTransform(), Matchers.<PTransform<?, ?>>equalTo(read));
+    assertThat(primitiveNode.getTransform(), equalTo(read));
     assertThat(primitiveNode.getEnclosingNode(), equalTo(compositeNode));
 
     hierarchy.setOutput(created);
     // The composite is listed as outputting a PValue created by the contained primitive
-    assertThat(compositeNode.getOutputs().values(), Matchers.<PValue>containsInAnyOrder(created));
+    assertThat(compositeNode.getOutputs().values(), containsInAnyOrder(created));
     // The producer of that PValue is still the primitive in which it is first output
     assertThat(hierarchy.getProducer(created), equalTo(primitiveNode));
     hierarchy.popNode();
@@ -403,14 +395,14 @@ public class TransformHierarchyTest implements Serializable {
 
     assertThat(visitedCompositeNodes, containsInAnyOrder(root, compositeNode));
     assertThat(visitedPrimitiveNodes, containsInAnyOrder(primitiveNode, otherPrimitive));
-    assertThat(visitedValuesInVisitor, Matchers.<PValue>containsInAnyOrder(created, mapped));
+    assertThat(visitedValuesInVisitor, containsInAnyOrder(created, mapped));
     assertThat(visitedValuesInVisitor, equalTo(visitedValues));
   }
 
   /**
-   * Tests that visiting the {@link TransformHierarchy} after replacing nodes does not visit any
-   * of the original nodes or inaccessible values but does visit all of the replacement nodes,
-   * new inaccessible replacement values, and the original output values.
+   * Tests that visiting the {@link TransformHierarchy} after replacing nodes does not visit any of
+   * the original nodes or inaccessible values but does visit all of the replacement nodes, new
+   * inaccessible replacement values, and the original output values.
    */
   @Test
   public void visitAfterReplace() {
@@ -467,7 +459,7 @@ public class TransformHierarchyTest implements Serializable {
     Entry<TupleTag<?>, PValue> replacementLongs =
         Iterables.getOnlyElement(replacementOutput.expand().entrySet());
     hierarchy.replaceOutputs(
-        Collections.<PValue, ReplacementOutput>singletonMap(
+        Collections.singletonMap(
             replacementOutput.get(longs),
             ReplacementOutput.of(
                 TaggedPValue.ofExpandedValue(output),
@@ -492,12 +484,12 @@ public class TransformHierarchyTest implements Serializable {
             });
 
     /*
-     Final Graph:
-     Upstream -> Upstream.out -> Composite -> (ReplacementParDo -> OriginalParDo.out)
-     */
+    Final Graph:
+    Upstream -> Upstream.out -> Composite -> (ReplacementParDo -> OriginalParDo.out)
+    */
     assertThat(visitedCompositeNodes, containsInAnyOrder(root, compositeNode));
     assertThat(visitedPrimitiveNodes, containsInAnyOrder(upstreamNode, replacementParNode));
-    assertThat(visitedValues, Matchers.<PValue>containsInAnyOrder(upstream, output));
+    assertThat(visitedValues, containsInAnyOrder(upstream, output));
   }
 
   @Test
@@ -522,7 +514,7 @@ public class TransformHierarchyTest implements Serializable {
 
           @Override
           public Map<TupleTag<?>, PValue> getAdditionalInputs() {
-            return Collections.<TupleTag<?>, PValue>singletonMap(twoTag, two);
+            return Collections.singletonMap(twoTag, two);
           }
         };
     hierarchy.pushNode("consumes_both", one, multiConsumer);
@@ -545,9 +537,7 @@ public class TransformHierarchyTest implements Serializable {
             return input.apply(producer);
           }
         });
-    hierarchy.pushNode(
-        "creates_one_and_two",
-        PBegin.in(pipeline), producer);
+    hierarchy.pushNode("creates_one_and_two", PBegin.in(pipeline), producer);
     hierarchy.setOutput(oneAndTwo);
     hierarchy.popNode();
     hierarchy.setOutput(oneAndTwo);
@@ -620,13 +610,10 @@ public class TransformHierarchyTest implements Serializable {
   public void visitDoesNotVisitSkippedNodes() {
     PCollection<String> one =
         PCollection.createPrimitiveOutputInternal(
-                pipeline,
-                WindowingStrategy.globalDefault(),
-                IsBounded.BOUNDED,
-                StringUtf8Coder.of());
+            pipeline, WindowingStrategy.globalDefault(), IsBounded.BOUNDED, StringUtf8Coder.of());
     final PCollection<Integer> two =
         PCollection.createPrimitiveOutputInternal(
-                pipeline, WindowingStrategy.globalDefault(), IsBounded.UNBOUNDED, VarIntCoder.of());
+            pipeline, WindowingStrategy.globalDefault(), IsBounded.UNBOUNDED, VarIntCoder.of());
     final PDone done = PDone.in(pipeline);
     final TupleTag<String> oneTag = new TupleTag<String>() {};
     final TupleTag<Integer> twoTag = new TupleTag<Integer>() {};
@@ -643,7 +630,7 @@ public class TransformHierarchyTest implements Serializable {
 
           @Override
           public Map<TupleTag<?>, PValue> getAdditionalInputs() {
-            return Collections.<TupleTag<?>, PValue>singletonMap(twoTag, two);
+            return Collections.singletonMap(twoTag, two);
           }
         });
     hierarchy.setOutput(done);

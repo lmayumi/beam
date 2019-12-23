@@ -17,17 +17,17 @@
  */
 package org.apache.beam.runners.direct;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
 
 import com.google.auto.value.AutoValue;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
-import com.google.common.collect.Lists;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.PriorityQueue;
 import org.apache.beam.runners.core.KeyedWorkItem;
 import org.apache.beam.runners.core.KeyedWorkItems;
 import org.apache.beam.runners.core.StateNamespace;
@@ -38,8 +38,10 @@ import org.apache.beam.runners.core.StateTags;
 import org.apache.beam.runners.core.TimerInternals.TimerData;
 import org.apache.beam.runners.direct.DirectExecutionContext.DirectStepContext;
 import org.apache.beam.runners.direct.ParDoMultiOverrideFactory.StatefulParDo;
+import org.apache.beam.runners.direct.WatermarkManager.TimerUpdate;
 import org.apache.beam.runners.local.StructuralKey;
 import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.runners.AppliedPTransform;
 import org.apache.beam.sdk.state.StateSpec;
 import org.apache.beam.sdk.transforms.DoFn;
@@ -55,6 +57,11 @@ import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PValue;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.WindowingStrategy;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.CacheBuilder;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.CacheLoader;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.LoadingCache;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Lists;
+import org.joda.time.Instant;
 
 /** A {@link TransformEvaluatorFactory} for stateful {@link ParDo}. */
 final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements TransformEvaluatorFactory {
@@ -64,7 +71,7 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
 
   private final ParDoEvaluatorFactory<KV<K, InputT>, OutputT> delegateFactory;
 
-  StatefulParDoEvaluatorFactory(EvaluationContext evaluationContext) {
+  StatefulParDoEvaluatorFactory(EvaluationContext evaluationContext, PipelineOptions options) {
     this.delegateFactory =
         new ParDoEvaluatorFactory<>(
             evaluationContext,
@@ -79,7 +86,8 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
                     (StatefulParDo<?, ?, ?>) appliedStatefulParDo.getTransform();
                 return DoFnLifecycleManager.of(statefulParDo.getDoFn());
               }
-            });
+            },
+            options);
     this.cleanupRegistry =
         CacheBuilder.newBuilder()
             .weakValues()
@@ -104,14 +112,14 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
   @SuppressWarnings({"unchecked", "rawtypes"})
   private TransformEvaluator<KeyedWorkItem<K, KV<K, InputT>>> createEvaluator(
       AppliedPTransform<
-              PCollection<? extends KeyedWorkItem<K, KV<K, InputT>>>, PCollectionTuple,
+              PCollection<? extends KeyedWorkItem<K, KV<K, InputT>>>,
+              PCollectionTuple,
               StatefulParDo<K, InputT, OutputT>>
           application,
       CommittedBundle<KeyedWorkItem<K, KV<K, InputT>>> inputBundle)
       throws Exception {
 
-    final DoFn<KV<K, InputT>, OutputT> doFn =
-        application.getTransform().getDoFn();
+    final DoFn<KV<K, InputT>, OutputT> doFn = application.getTransform().getDoFn();
     final DoFnSignature signature = DoFnSignatures.getSignature(doFn.getClass());
 
     // If the DoFn is stateful, schedule state clearing.
@@ -134,7 +142,9 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
             inputBundle.getKey(),
             application.getTransform().getSideInputs(),
             application.getTransform().getMainOutputTag(),
-            application.getTransform().getAdditionalOutputTags().getAll());
+            application.getTransform().getAdditionalOutputTags().getAll(),
+            application.getTransform().getSchemaInformation(),
+            application.getTransform().getSideInputMapping());
 
     return new StatefulParDoEvaluator<>(delegateEvaluator);
   }
@@ -159,16 +169,10 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
         taggedValues.put(pv.getKey(), (PCollection<?>) pv.getValue());
       }
       PCollection<?> pc =
-          taggedValues
-              .get(
-                  transformOutputWindow
-                      .getTransform()
-                      .getTransform()
-                      .getMainOutputTag());
+          taggedValues.get(transformOutputWindow.getTransform().getTransform().getMainOutputTag());
       WindowingStrategy<?, ?> windowingStrategy = pc.getWindowingStrategy();
       BoundedWindow window = transformOutputWindow.getWindow();
-      final DoFn<?, ?> doFn =
-          transformOutputWindow.getTransform().getTransform().getDoFn();
+      final DoFn<?, ?> doFn = transformOutputWindow.getTransform().getTransform().getDoFn();
       final DoFnSignature signature = DoFnSignatures.getSignature(doFn.getClass());
 
       final DirectStepContext stepContext =
@@ -182,26 +186,21 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
               (Coder<BoundedWindow>) windowingStrategy.getWindowFn().windowCoder(), window);
 
       Runnable cleanup =
-          new Runnable() {
-            @Override
-            public void run() {
-              for (StateDeclaration stateDecl : signature.stateDeclarations().values()) {
-                StateTag<?> tag;
-                try {
-                  tag =
-                      StateTags.tagForSpec(
-                          stateDecl.id(), (StateSpec) stateDecl.field().get(doFn));
-                } catch (IllegalAccessException e) {
-                  throw new RuntimeException(
-                      String.format(
-                          "Error accessing %s for %s",
-                          StateSpec.class.getName(), doFn.getClass().getName()),
-                      e);
-                }
-                stepContext.stateInternals().state(namespace, tag).clear();
+          () -> {
+            for (StateDeclaration stateDecl : signature.stateDeclarations().values()) {
+              StateTag<?> tag;
+              try {
+                tag = StateTags.tagForSpec(stateDecl.id(), (StateSpec) stateDecl.field().get(doFn));
+              } catch (IllegalAccessException e) {
+                throw new RuntimeException(
+                    String.format(
+                        "Error accessing %s for %s",
+                        StateSpec.class.getName(), doFn.getClass().getName()),
+                    e);
               }
-              cleanupRegistry.invalidate(transformOutputWindow);
+              stepContext.stateInternals().state(namespace, tag).clear();
             }
+            cleanupRegistry.invalidate(transformOutputWindow);
           };
 
       evaluationContext.scheduleAfterWindowExpiration(
@@ -213,7 +212,8 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
   @AutoValue
   abstract static class AppliedPTransformOutputKeyAndWindow<K, InputT, OutputT> {
     abstract AppliedPTransform<
-            PCollection<? extends KeyedWorkItem<K, KV<K, InputT>>>, PCollectionTuple,
+            PCollection<? extends KeyedWorkItem<K, KV<K, InputT>>>,
+            PCollectionTuple,
             StatefulParDo<K, InputT, OutputT>>
         getTransform();
 
@@ -223,7 +223,8 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
 
     static <K, InputT, OutputT> AppliedPTransformOutputKeyAndWindow<K, InputT, OutputT> create(
         AppliedPTransform<
-                PCollection<? extends KeyedWorkItem<K, KV<K, InputT>>>, PCollectionTuple,
+                PCollection<? extends KeyedWorkItem<K, KV<K, InputT>>>,
+                PCollectionTuple,
                 StatefulParDo<K, InputT, OutputT>>
             transform,
         StructuralKey<K> key,
@@ -237,10 +238,13 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
       implements TransformEvaluator<KeyedWorkItem<K, KV<K, InputT>>> {
 
     private final DoFnLifecycleManagerRemovingTransformEvaluator<KV<K, InputT>> delegateEvaluator;
+    private final List<TimerData> pushedBackTimers = new ArrayList<>();
+    private final DirectTimerInternals timerInternals;
 
     public StatefulParDoEvaluator(
         DoFnLifecycleManagerRemovingTransformEvaluator<KV<K, InputT>> delegateEvaluator) {
       this.delegateEvaluator = delegateEvaluator;
+      this.timerInternals = delegateEvaluator.getParDoEvaluator().getStepContext().timerInternals();
     }
 
     @Override
@@ -250,7 +254,12 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
         delegateEvaluator.processElement(windowedValue);
       }
 
-      for (TimerData timer : gbkResult.getValue().timersIterable()) {
+      Instant currentInputWatermark = timerInternals.currentInputWatermarkTime();
+      PriorityQueue<TimerData> toBeFiredTimers =
+          new PriorityQueue<>(Comparator.comparing(TimerData::getTimestamp));
+      gbkResult.getValue().timersIterable().forEach(toBeFiredTimers::add);
+      while (!toBeFiredTimers.isEmpty()) {
+        TimerData timer = toBeFiredTimers.poll();
         checkState(
             timer.getNamespace() instanceof WindowNamespace,
             "Expected Timer %s to be in a %s, but got %s",
@@ -260,17 +269,23 @@ final class StatefulParDoEvaluatorFactory<K, InputT, OutputT> implements Transfo
         WindowNamespace<?> windowNamespace = (WindowNamespace) timer.getNamespace();
         BoundedWindow timerWindow = windowNamespace.getWindow();
         delegateEvaluator.onTimer(timer, timerWindow);
+        if (timerInternals.containsUpdateForTimeBefore(currentInputWatermark)) {
+          break;
+        }
       }
+      pushedBackTimers.addAll(toBeFiredTimers);
     }
 
     @Override
     public TransformResult<KeyedWorkItem<K, KV<K, InputT>>> finishBundle() throws Exception {
       TransformResult<KV<K, InputT>> delegateResult = delegateEvaluator.finishBundle();
-
+      TimerUpdate timerUpdate =
+          delegateResult.getTimerUpdate().withPushedBackTimers(pushedBackTimers);
+      pushedBackTimers.clear();
       StepTransformResult.Builder<KeyedWorkItem<K, KV<K, InputT>>> regroupedResult =
           StepTransformResult.<KeyedWorkItem<K, KV<K, InputT>>>withHold(
                   delegateResult.getTransform(), delegateResult.getWatermarkHold())
-              .withTimerUpdate(delegateResult.getTimerUpdate())
+              .withTimerUpdate(timerUpdate)
               .withState(delegateResult.getState())
               .withMetricUpdates(delegateResult.getLogicalMetricUpdates())
               .addOutput(Lists.newArrayList(delegateResult.getOutputBundles()));
